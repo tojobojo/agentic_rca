@@ -5,12 +5,15 @@ The agent autonomously investigates anomalies using Spark SQL tools.
 """
 from typing import Optional, List
 from dataclasses import dataclass
+import logging
 
 from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 
 from validation_engine import Anomaly
 from config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 # --- Tool Definitions ---
@@ -287,13 +290,13 @@ Please investigate why this step dropped more rows than expected and provide you
         reports = []
         
         for i, anomaly in enumerate(anomalies):
-            print(f"[RCA Agent] Analyzing anomaly {i+1}/{len(anomalies)}: {anomaly.step.task_key}...")
+            logger.info("[RCA Agent] Analyzing anomaly %d/%d: %s...", i+1, len(anomalies), anomaly.step.task_key)
             try:
                 report = self.analyze(anomaly)
                 reports.append(f"# RCA for Step: {anomaly.step.task_key}\n\n{report}")
             except Exception as e:
                 error_report = f"# RCA for Step: {anomaly.step.task_key}\n\nError during analysis: {str(e)}"
                 reports.append(error_report)
-                print(f"  -> Error: {e}")
+                logger.error("RCA error for %s: %s", anomaly.step.task_key, e)
         
         return reports

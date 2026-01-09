@@ -6,6 +6,7 @@ Responsible for:
 
 NOTE: This module does NOT collect metrics. Use HistoryCollector separately.
 """
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -13,6 +14,8 @@ import statistics
 
 from pipeline_parser import ParsedStep
 from config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,7 +63,7 @@ class ValidationEngine:
                 from pyspark.sql import SparkSession
                 self.spark = SparkSession.builder.getOrCreate()
             except ImportError:
-                print("Warning: PySpark not available. Running in mock mode.")
+                logger.warning("PySpark not available. Running in mock mode.")
     
     def _get_latest_metrics(self, job_id: int, task_key: str) -> Optional[StepMetrics]:
         """
@@ -74,7 +77,7 @@ class ValidationEngine:
             metrics_df = self.spark.table(self.config.metrics_table)
             latest = (
                 metrics_df
-                .filter(f"job_id = {job_id} AND task_key = '{task_key}'")
+                .filter((metrics_df.job_id == job_id) & (metrics_df.task_key == task_key))
                 .orderBy("run_timestamp", ascending=False)
                 .limit(1)
                 .collect()
@@ -94,7 +97,7 @@ class ValidationEngine:
                 drop_rate=row.get("drop_rate", 0.0)
             )
         except Exception as e:
-            print(f"Warning: Could not fetch latest metrics: {e}")
+            logger.warning(f"Could not fetch latest metrics: {e}")
             return None
     
     def _get_historical_metrics(self, job_id: int, task_key: str, exclude_latest: bool = True) -> List[Dict]:
@@ -111,7 +114,7 @@ class ValidationEngine:
         
         try:
             history_df = self.spark.table(self.config.metrics_table)
-            query = history_df.filter(f"job_id = {job_id} AND task_key = '{task_key}'")
+            query = history_df.filter((history_df.job_id == job_id) & (history_df.task_key == task_key))
             query = query.orderBy("run_timestamp", ascending=False)
             
             if exclude_latest:
@@ -123,7 +126,7 @@ class ValidationEngine:
                 query = query.limit(30)
                 return [row.asDict() for row in query.collect()]
         except Exception as e:
-            print(f"Warning: Could not fetch history: {e}")
+            logger.warning(f"Could not fetch history: {e}")
             return []
     
     def _detect_anomaly(
@@ -184,7 +187,7 @@ class ValidationEngine:
         metrics = self._get_latest_metrics(job_id, step.task_key)
         
         if metrics is None:
-            print(f"  -> No metrics found. Run HistoryCollector first.")
+            logger.info("No metrics found. Run HistoryCollector first.")
             return None
         
         # Get historical metrics (excluding latest for comparison)
@@ -203,15 +206,15 @@ class ValidationEngine:
         """
         anomalies = []
         
-        print("[Validation] Reading metrics from History Collector...")
+        logger.info("Reading metrics from History Collector...")
         
         for step in steps:
-            print(f"[Validation] Checking step: {step.task_key}...")
+            logger.info(f"Checking step: {step.task_key}...")
             anomaly = self.validate_step(job_id, step)
             if anomaly:
-                print(f"  -> ANOMALY: {anomaly.reason}")
+                logger.warning(f"ANOMALY: {anomaly.reason}")
                 anomalies.append(anomaly)
             else:
-                print(f"  -> OK")
+                logger.info("OK")
         
         return anomalies

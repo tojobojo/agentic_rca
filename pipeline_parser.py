@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from discovery_agent import StepInfo
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -145,6 +148,6 @@ class PipelineParser:
                     target_tables=tables.get("targets")
                 ))
             else:
-                print(f"Warning: No code content for step {step.task_key}")
+                logger.warning("No code content for step %s", step.task_key)
         
         return parsed

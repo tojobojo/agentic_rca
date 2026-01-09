@@ -6,6 +6,9 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 from config import get_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,7 +78,7 @@ class LineageClient:
                 downstream_tables=downstream
             )
         except Exception as e:
-            print(f"Warning: Lineage API error for {table_name}: {e}")
+            logger.warning("Lineage API error for %s: %s", table_name, e)
             return None
     
     def get_job_lineage(self, job_id: int, run_id: Optional[str] = None) -> Dict[str, dict]:
@@ -99,7 +102,7 @@ class LineageClient:
                 runs = list(client.jobs.list_runs(job_id=job_id, limit=1))
             
             if not runs:
-                print(f"No runs found for job {job_id}")
+                logger.info("No runs found for job %s", job_id)
                 return {}
             
             latest_run = runs[0]
@@ -126,7 +129,7 @@ class LineageClient:
             
             return table_mapping
         except Exception as e:
-            print(f"Warning: Could not fetch job lineage: {e}")
+            logger.warning("Could not fetch job lineage: %s", e)
             return {}
     
     def get_tables_from_information_schema(
@@ -168,7 +171,7 @@ class LineageClient:
             rows = spark.sql(query).collect()
             return {row.full_name: [] for row in rows}
         except Exception as e:
-            print(f"Warning: Could not query information_schema: {e}")
+            logger.warning("Could not query information_schema: %s", e)
             return {}
 
 
@@ -204,7 +207,7 @@ def get_step_tables(
             if key in lineage_result:
                 result[key] = lineage_result[key]
     except Exception as e:
-        print(f"Lineage API unavailable: {e}")
+        logger.warning("Lineage API unavailable: %s", e)
     
     # Fill missing with fallback manifest
     if fallback_to_manifest:

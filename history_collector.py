@@ -16,6 +16,9 @@ from config import get_config
 from discovery_agent import DiscoveryAgent
 from pipeline_parser import PipelineParser
 from lineage_client import get_step_tables
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,7 +64,7 @@ class HistoryCollector:
                 df = self.spark.table(table_name)
             return df.count()
         except Exception as e:
-            print(f"  Warning: Could not count {table_name}: {e}")
+            logger.warning("Could not count %s: %s", table_name, e)
             return 0
     
     def collect_step_metrics(
@@ -132,10 +135,10 @@ class HistoryCollector:
             self.spark.sql(f"DESCRIBE TABLE {table}")
             df.write.format("delta").mode("append").saveAsTable(table)
         except:
-            print(f"[Collector] Creating metrics table: {table}")
+            logger.info("[Collector] Creating metrics table: %s", table)
             df.write.format("delta").mode("overwrite").saveAsTable(table)
         
-        print(f"[Collector] Saved {len(metrics)} step metrics to {table}")
+        logger.info("[Collector] Saved %d step metrics to %s", len(metrics), table)
     
     def run(
         self,
@@ -155,17 +158,18 @@ class HistoryCollector:
             branch: Git branch
             manifest_path: Path to JSON manifest with table mappings
         """
-        print("=" * 60)
-        print("       HISTORY COLLECTOR")
-        print("=" * 60)
-        print(f"Job ID: {job_id}")
-        print(f"Run ID: {run_id}")
-        print(f"Manifest: {manifest_path or 'Using Lineage API'}")
-        print("=" * 60)
+        # header
+        logger.info("%s", "=" * 60)
+        logger.info("       HISTORY COLLECTOR")
+        logger.info("%s", "=" * 60)
+        logger.info("Job ID: %s", job_id)
+        logger.info("Run ID: %s", run_id)
+        logger.info("Manifest: %s", manifest_path or 'Using Lineage API')
+        logger.info("%s", "=" * 60)
         
         # Step 1: Discover steps from Job
-        print("\n[Phase 1] DISCOVERY")
-        print("-" * 40)
+        logger.info("\n[Phase 1] DISCOVERY")
+        logger.info("-" * 40)
         
         if gitlab_url:
             discovery = DiscoveryAgent()
@@ -181,23 +185,23 @@ class HistoryCollector:
             run = client.jobs.get_run(int(run_id))
             task_keys = [t.task_key for t in run.tasks or []]
         
-        print(f"  Found {len(task_keys)} steps")
+        logger.info("  Found %d steps", len(task_keys))
         
         # Step 2: Get table mappings (same as main system)
-        print("\n[Phase 2] LINEAGE")
-        print("-" * 40)
+        logger.info("\n[Phase 2] LINEAGE")
+        logger.info("-" * 40)
         
         manifest_data = None
         if manifest_path and os.path.exists(manifest_path):
             with open(manifest_path, 'r') as f:
                 manifest_data = json.load(f)
-            print(f"  Loaded manifest with {len(manifest_data)} mappings")
+            logger.info("  Loaded manifest with %d mappings", len(manifest_data))
         
         table_mapping = get_step_tables(job_id, task_keys, fallback_to_manifest=manifest_data)
         
         # Step 3: Collect metrics for each step
-        print("\n[Phase 3] COLLECTION")
-        print("-" * 40)
+        logger.info("\n[Phase 3] COLLECTION")
+        logger.info("-" * 40)
         
         all_metrics = []
         for task_key in task_keys:
@@ -205,7 +209,7 @@ class HistoryCollector:
             sources = tables.get("sources", [])
             targets = tables.get("targets", [])
             
-            print(f"[Collector] {task_key}: {sources} -> {targets}")
+            logger.info("[Collector] %s: %s -> %s", task_key, sources, targets)
             
             metrics = self.collect_step_metrics(
                 job_id=job_id,
@@ -215,17 +219,17 @@ class HistoryCollector:
                 target_tables=targets
             )
             
-            print(f"  -> Input: {metrics.input_count:,} | Output: {metrics.output_count:,} | Drop: {metrics.drop_rate:.1%}")
+            logger.info("  -> Input: %s | Output: %s | Drop: %.1%%", f"{metrics.input_count:,}", f"{metrics.output_count:,}", metrics.drop_rate*100)
             all_metrics.append(metrics)
         
         # Step 4: Save to Delta
-        print("\n[Phase 4] SAVE")
-        print("-" * 40)
+        logger.info("\n[Phase 4] SAVE")
+        logger.info("-" * 40)
         self.save_metrics(all_metrics)
         
-        print("\n" + "=" * 60)
-        print("       COLLECTION COMPLETE")
-        print("=" * 60)
+        logger.info("\n%s", "=" * 60)
+        logger.info("       COLLECTION COMPLETE")
+        logger.info("%s", "=" * 60)
 
 
 def main():

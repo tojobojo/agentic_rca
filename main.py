@@ -15,11 +15,13 @@ import os
 import sys
 from datetime import datetime
 from typing import Optional, List, Dict
+import logging
 
 # Ensure package imports work
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import get_config, Config
+logger = logging.getLogger(__name__)
 from discovery_agent import DiscoveryAgent
 from pipeline_parser import PipelineParser, ParsedStep
 from validation_engine import ValidationEngine
@@ -52,19 +54,19 @@ def run_rca_pipeline(
     Returns:
         The generated RCA report as Markdown string
     """
-    print("=" * 60)
-    print("       AGENTIC RCA SYSTEM - Production Mode")
-    print("=" * 60)
-    print(f"Job ID: {job_id}")
-    print(f"GitLab: {gitlab_url}")
-    print(f"Branch: {branch}")
-    print(f"Performance Analysis: {'Enabled' if analyze_performance else 'Disabled'}")
-    print(f"Manifest: {manifest_path or 'None (using Lineage API)'}")
-    print("=" * 60)
+    logger.info("%s", "=" * 60)
+    logger.info("       AGENTIC RCA SYSTEM - Production Mode")
+    logger.info("%s", "=" * 60)
+    logger.info("Job ID: %s", job_id)
+    logger.info("GitLab: %s", gitlab_url)
+    logger.info("Branch: %s", branch)
+    logger.info("Performance Analysis: %s", 'Enabled' if analyze_performance else 'Disabled')
+    logger.info("Manifest: %s", manifest_path or 'None (using Lineage API)')
+    logger.info("%s", "=" * 60)
     
     # Phase 1: Discovery
-    print("\n[Phase 1] DISCOVERY")
-    print("-" * 40)
+    logger.info("\n[Phase 1] DISCOVERY")
+    logger.info("-" * 40)
     discovery = DiscoveryAgent()
     steps = discovery.discover(job_id, gitlab_url, branch)
     
@@ -72,35 +74,35 @@ def run_rca_pipeline(
         return "# RCA Report\n\nNo steps discovered from the job. Please check the Job ID and GitLab URL."
     
     # Phase 2: Lineage / Table Mapping
-    print("\n[Phase 2] LINEAGE")
-    print("-" * 40)
+    logger.info("\n[Phase 2] LINEAGE")
+    logger.info("-" * 40)
     
     # Load manifest if provided
     manifest_data = None
     if manifest_path and os.path.exists(manifest_path):
         with open(manifest_path, 'r') as f:
             manifest_data = json.load(f)
-        print(f"  Loaded manifest with {len(manifest_data)} step mappings")
+        logger.info("  Loaded manifest with %d step mappings", len(manifest_data))
     
     # Get table mappings (Lineage API or manifest)
     task_keys = [s.task_key for s in steps]
     table_mapping = get_step_tables(job_id, task_keys, fallback_to_manifest=manifest_data)
     
     for key, tables in table_mapping.items():
-        print(f"  {key}: Sources={tables.get('sources', [])} Targets={tables.get('targets', [])}")
+        logger.info("  %s: Sources=%s Targets=%s", key, tables.get('sources', []), tables.get('targets', []))
     
     # Phase 3: Parsing
-    print("\n[Phase 3] PARSING")
-    print("-" * 40)
+    logger.info("\n[Phase 3] PARSING")
+    logger.info("-" * 40)
     parser = PipelineParser()
     parsed_steps = parser.parse_all(steps, table_mapping=table_mapping)
     
     for ps in parsed_steps:
-        print(f"  {ps.task_key}: {ps.logic_type} | Sources: {ps.source_tables} | Targets: {ps.target_tables}")
+        logger.info("  %s: %s | Sources: %s | Targets: %s", ps.task_key, ps.logic_type, ps.source_tables, ps.target_tables)
     
     # Phase 3: Validation
-    print("\n[Phase 3] VALIDATION")
-    print("-" * 40)
+    logger.info("\n[Phase 3] VALIDATION")
+    logger.info("-" * 40)
     validator = ValidationEngine(spark_session)
     anomalies = validator.validate_all(job_id, parsed_steps)
     
@@ -110,21 +112,21 @@ def run_rca_pipeline(
     
     if anomalies:
         # Phase 4: RCA Investigation
-        print(f"\n[Phase 4] RCA INVESTIGATION ({len(anomalies)} anomalies)")
-        print("-" * 40)
+        logger.info("\n[Phase 4] RCA INVESTIGATION (%d anomalies)", len(anomalies))
+        logger.info("-" * 40)
         rca = RCAAgent()
         rca_reports = rca.analyze_all(anomalies)
     else:
-        print("\n[Result] No anomalies detected.")
+        logger.info("\n[Result] No anomalies detected.")
     
     # Phase 5: Performance Analysis (Optional)
     if analyze_performance:
-        print(f"\n[Phase 5] PERFORMANCE ANALYSIS")
-        print("-" * 40)
+        logger.info("\n[Phase 5] PERFORMANCE ANALYSIS")
+        logger.info("-" * 40)
         perf_agent = PerformanceAgent()
         
         for ps in parsed_steps:
-            print(f"[Perf Agent] Analyzing: {ps.task_key}...")
+            logger.info("[Perf Agent] Analyzing: %s...", ps.task_key)
             try:
                 context = PerformanceContext(
                     step_name=ps.task_key,
@@ -136,11 +138,11 @@ def run_rca_pipeline(
                 perf_report = perf_agent.analyze(context)
                 performance_reports.append(f"## Performance: {ps.task_key}\n\n{perf_report}")
             except Exception as e:
-                print(f"  -> Error: {e}")
+                logger.error("  -> Error: %s", e)
     
     # Phase 6: Report Generation
-    print("\n[Phase 6] REPORT GENERATION")
-    print("-" * 40)
+    logger.info("\n[Phase 6] REPORT GENERATION")
+    logger.info("-" * 40)
     
     final_report = f"""# Agentic RCA Report
 **Generated**: {datetime.now().isoformat()}
@@ -181,7 +183,7 @@ def run_rca_pipeline(
     if output_path:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(final_report)
-        print(f"Report saved to: {output_path}")
+        logger.info("Report saved to: %s", output_path)
     
     return final_report
 
@@ -252,10 +254,10 @@ Examples:
     )
     
     # Print summary
-    print("\n" + "=" * 60)
-    print("       RCA COMPLETE")
-    print("=" * 60)
-    print(f"Full report saved to: {args.output}")
+    logger.info("\n%s", "=" * 60)
+    logger.info("       RCA COMPLETE")
+    logger.info("%s", "=" * 60)
+    logger.info("Full report saved to: %s", args.output)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,11 @@ Responsible for:
 import os
 import re
 import shutil
+import subprocess
+import stat
+import tempfile
+import pathlib
+import sys
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from pathlib import Path
@@ -17,6 +22,9 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import Task
 
 from config import get_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,20 +115,71 @@ class DiscoveryAgent:
         
         repo_dir.mkdir(parents=True, exist_ok=True)
         
-        # Add token to URL for authentication
-        # Format: https://oauth2:TOKEN@gitlab.com/user/repo.git
+        # Two-step clone strategy:
+        # 1) Try GitPython clone (may work with auth URL)
+        # 2) Fallback to subprocess `git clone` using a temporary GIT_ASKPASS script
+
         auth_url = gitlab_url
-        if self.config.gitlab_token:
-            if "https://" in gitlab_url:
-                auth_url = gitlab_url.replace(
-                    "https://", 
-                    f"https://oauth2:{self.config.gitlab_token}@"
-                )
-        
-        # Clone
-        git.Repo.clone_from(auth_url, repo_dir, branch=branch, depth=1)
-        self.repo_path = repo_dir
-        return repo_dir
+        if self.config.gitlab_token and gitlab_url.startswith("https://"):
+            # Create auth URL for GitPython attempt (avoid logging this value)
+            auth_url = gitlab_url.replace("https://", f"https://oauth2:{self.config.gitlab_token}@")
+
+        # Attempt 1: GitPython clone using auth URL
+        try:
+            git.Repo.clone_from(auth_url, repo_dir, branch=branch, depth=1)
+            self.repo_path = repo_dir
+            return repo_dir
+        except Exception:
+            logger.info("GitPython clone failed; attempting subprocess fallback")
+
+        # Attempt 2: subprocess `git clone` with GIT_ASKPASS script to supply token
+        askpass_script = None
+        try:
+            if self.config.gitlab_token:
+                askpass_fd, askpass_path = tempfile.mkstemp(prefix="git_askpass_", suffix=".sh")
+                askpass_script = Path(askpass_path)
+                with os.fdopen(askpass_fd, "w") as fh:
+                    # Script prints the token to stdout for git to use
+                    fh.write("#!/bin/sh\n")
+                    fh.write(f"echo '{self.config.gitlab_token}'\n")
+                # Make executable
+                os.chmod(askpass_path, os.stat(askpass_path).st_mode | stat.S_IEXEC)
+
+                env = os.environ.copy()
+                env["GIT_ASKPASS"] = askpass_path
+                env["GIT_TERMINAL_PROMPT"] = "0"
+
+                cmd = [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    branch,
+                    gitlab_url,
+                    str(repo_dir)
+                ]
+
+                subprocess.run(cmd, check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            else:
+                # No token present; try normal subprocess clone
+                cmd = ["git", "clone", "--depth", "1", "--branch", branch, gitlab_url, str(repo_dir)]
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            self.repo_path = repo_dir
+            return repo_dir
+        except subprocess.CalledProcessError as e:
+            logger.error("Subprocess git clone failed: %s", e)
+            if repo_dir.exists():
+                shutil.rmtree(repo_dir, ignore_errors=True)
+            raise RuntimeError(f"Failed to clone {gitlab_url}: {e}")
+        finally:
+            # Cleanup askpass script if created
+            try:
+                if askpass_script and askpass_script.exists():
+                    askpass_script.unlink()
+            except Exception:
+                pass
     
     def map_databricks_path_to_git(self, databricks_path: str) -> Optional[str]:
         """
@@ -170,10 +229,13 @@ class DiscoveryAgent:
             git_path = self.map_databricks_path_to_git(step.notebook_path)
             if git_path:
                 step.git_file_path = git_path
-                with open(git_path, 'r', encoding='utf-8') as f:
-                    step.code_content = f.read()
+                try:
+                    with open(git_path, 'r', encoding='utf-8') as f:
+                        step.code_content = f.read()
+                except Exception as e:
+                    logger.warning("Could not read file %s: %s", git_path, e)
             else:
-                print(f"Warning: Could not resolve Git path for {step.notebook_path}")
+                logger.warning("Could not resolve Git path for %s", step.notebook_path)
         
         return steps
     
@@ -189,20 +251,20 @@ class DiscoveryAgent:
         Returns:
             List of StepInfo with resolved code content
         """
-        print(f"[Discovery] Fetching Job {job_id}...")
+        logger.info("[Discovery] Fetching Job %s...", job_id)
         job_json = self.fetch_job_definition(job_id)
-        
-        print(f"[Discovery] Extracting steps...")
+
+        logger.info("[Discovery] Extracting steps...")
         steps = self.extract_steps_from_job(job_json)
-        print(f"[Discovery] Found {len(steps)} steps.")
-        
-        print(f"[Discovery] Cloning GitLab repo...")
+        logger.info("[Discovery] Found %d steps.", len(steps))
+
+        logger.info("[Discovery] Cloning GitLab repo...")
         self.clone_gitlab_repo(gitlab_url, branch)
-        
-        print(f"[Discovery] Mapping paths to Git files...")
+
+        logger.info("[Discovery] Mapping paths to Git files...")
         resolved_steps = self.resolve_steps(steps)
-        
+
         resolved_count = sum(1 for s in resolved_steps if s.git_file_path)
-        print(f"[Discovery] Resolved {resolved_count}/{len(steps)} steps to Git files.")
+        logger.info("[Discovery] Resolved %d/%d steps to Git files.", resolved_count, len(steps))
         
         return resolved_steps
