@@ -1,0 +1,35 @@
+{
+    "ingest_bronze": {
+        "sources": [
+            "raw.landing_zone"
+        ],
+        "targets": [
+            "bronze.sensor_data"
+        ]
+    },
+    "clean_silver": {
+        "sources": [
+            "bronze.sensor_data",
+            "ref.lookup_codes"
+        ],
+        "targets": [
+            "silver.sensor_data_clean"
+        ]
+    },
+    "aggregate_gold": {
+        "sources": [
+            "silver.sensor_data_clean"
+        ],
+        "targets": [
+            "gold.daily_aggregates"
+        ]
+    },
+    "export_report": {
+        "sources": [
+            "gold.daily_aggregates"
+        ],
+        "targets": [
+            "reporting.tableau_feed"
+        ]
+    }
+}
