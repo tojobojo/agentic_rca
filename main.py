@@ -48,6 +48,12 @@ def run_rca_orchestrator(
     logger.info(f"Collect Metrics: {collect_metrics}")
     logger.info(f"Manifest: {manifest_path}")
     
+    # Validate configuration
+    config = get_config()
+    errors = config.validate()
+    if errors:
+        raise ValueError(f"Configuration errors: {', '.join(errors)}")
+    
     # Load manifest if provided
     manifest_data = None
     if manifest_path and os.path.exists(manifest_path):
@@ -78,7 +84,7 @@ def run_rca_orchestrator(
     # For simplicity, we ask the builder to discover steps first? 
     # Actually, builder takes a step_id. We need to enlist steps first.
     # Let's use the discovery agent inside the builder (accessed via private member or we instantiate one here)
-    steps = ctx_builder.discovery.discover(job_id, "") # URL optional if token present?
+    steps = ctx_builder.discovery.discover(job_id, get_config().gitlab_url)
     task_keys = [s.task_key for s in steps]
     
     if not task_keys:

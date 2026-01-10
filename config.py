@@ -41,6 +41,8 @@ class Config:
             errors.append("DATABRICKS_TOKEN is required")
         if not self.openai_api_key:
             errors.append("OPENAI_API_KEY is required")
+        if not self.gitlab_url:
+            errors.append("GITLAB_URL is required for code discovery")
         return errors
     
     def __repr__(self):
