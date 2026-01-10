@@ -10,7 +10,8 @@ import logging
 from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 
-from validation_engine import Anomaly
+from anomaly_engine import Anomaly
+from execution_context import ExecutionContext
 from config import get_config
 
 logger = logging.getLogger(__name__)
@@ -217,45 +218,45 @@ class RCAAgent:
             ]
         )
     
-    def _build_prompt(self, anomaly: Anomaly) -> str:
+    def _build_prompt(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """Build the investigation prompt for the agent."""
-        step = anomaly.step
-        metrics = anomaly.metrics
+        metrics_info = f"""
+        Metric: {anomaly.metric_name}
+        Current Value: {anomaly.current_value:.2f}
+        Historical Avg: {anomaly.historical_avg:.2f}
+        Z-Score: {anomaly.deviation_z_score:.2f}
+        """
         
         prompt = f"""
 Investigate the following anomaly in a Databricks ETL pipeline:
 
-**Step Name**: {step.task_key}
-**Logic Type**: {step.logic_type}
-**Logic Summary**: {step.logic_summary}
+**Step Name**: {context.step_id}
+**Logic Type**: {context.logic_type}
+**Logic Summary**: {context.logic_summary}
 
-**Source Tables**: {', '.join(step.source_tables) or 'Unknown'}
-**Target Tables**: {', '.join(step.target_tables) or 'Unknown'}
+**Source Tables**: {', '.join(context.source_tables) or 'Unknown'}
+**Target Tables**: {', '.join(context.target_tables) or 'Unknown'}
 
-**Metrics**:
-- Input Rows: {metrics.input_count:,}
-- Output Rows: {metrics.output_count:,}
-- Dropped Rows: {metrics.drop_count:,}
-- Drop Rate: {metrics.drop_rate:.1%}
-
-**Anomaly Reason**: {anomaly.reason}
-**Historical Average Drop Rate**: {anomaly.historical_avg:.1%}
+**Anomaly Details**:
+{metrics_info}
+**Reason**: {anomaly.reason}
 
 **Step Code**:
 ```python
-{step.code_content[:3000]}
+{context.code_content[:3000]}
 ```
 
-Please investigate why this step dropped more rows than expected and provide your findings.
+Please investigate why this step behaved anomalously and provide your findings.
+Use the available tools (get_table_schema, query_spark_sql, etc.) to verify hypotheses.
 """
         return prompt
     
-    async def analyze_async(self, anomaly: Anomaly) -> str:
+    async def analyze_async(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """
         Analyze an anomaly using the RCA Agent (async version).
         Returns the agent's explanation.
         """
-        prompt = self._build_prompt(anomaly)
+        prompt = self._build_prompt(anomaly, context)
         
         # Run the agent
         result = await Runner.run(
@@ -265,7 +266,7 @@ Please investigate why this step dropped more rows than expected and provide you
         
         return result.final_output
     
-    def analyze(self, anomaly: Anomaly) -> str:
+    def analyze(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """
         Analyze an anomaly using the RCA Agent (sync wrapper).
         """
@@ -277,26 +278,28 @@ Please investigate why this step dropped more rows than expected and provide you
             # If we're already in an async context, use run_until_complete on a new thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.analyze_async(anomaly))
+                future = pool.submit(asyncio.run, self.analyze_async(anomaly, context))
                 return future.result()
         except RuntimeError:
             # No running loop, we can use asyncio.run
-            return asyncio.run(self.analyze_async(anomaly))
+            return asyncio.run(self.analyze_async(anomaly, context))
     
-    def analyze_all(self, anomalies: List[Anomaly]) -> List[str]:
+    def analyze_all(self, anomalies_with_context: List[tuple]) -> List[str]:
         """
         Analyze all anomalies and return a list of reports.
+        Args:
+            anomalies_with_context: List of (Anomaly, ExecutionContext) tuples
         """
         reports = []
         
-        for i, anomaly in enumerate(anomalies):
-            logger.info("[RCA Agent] Analyzing anomaly %d/%d: %s...", i+1, len(anomalies), anomaly.step.task_key)
+        for i, (anomaly, context) in enumerate(anomalies_with_context):
+            logger.info("[RCA Agent] Analyzing anomaly %d/%d: %s...", i+1, len(anomalies_with_context), context.step_id)
             try:
-                report = self.analyze(anomaly)
-                reports.append(f"# RCA for Step: {anomaly.step.task_key}\n\n{report}")
+                report = self.analyze(anomaly, context)
+                reports.append(f"# RCA for Step: {context.step_id}\n\n{report}")
             except Exception as e:
-                error_report = f"# RCA for Step: {anomaly.step.task_key}\n\nError during analysis: {str(e)}"
+                error_report = f"# RCA for Step: {context.step_id}\n\nError during analysis: {str(e)}"
                 reports.append(error_report)
-                logger.error("RCA error for %s: %s", anomaly.step.task_key, e)
+                logger.error("RCA error for %s: %s", context.step_id, e)
         
         return reports
