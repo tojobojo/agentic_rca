@@ -9,6 +9,7 @@ import logging
 
 from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
+import asyncio
 
 from anomaly_engine import Anomaly
 from execution_context import ExecutionContext
@@ -254,17 +255,46 @@ Use the available tools (get_table_schema, query_spark_sql, etc.) to verify hypo
     async def analyze_async(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """
         Analyze an anomaly using the RCA Agent (async version).
+        Includes retry logic with exponential backoff.
         Returns the agent's explanation.
         """
         prompt = self._build_prompt(anomaly, context)
         
-        # Run the agent
-        result = await Runner.run(
-            self.agent,
-            prompt,
-        )
+        max_retries = self.config.llm_max_retries
+        retry_delay = self.config.llm_retry_delay_seconds
         
-        return result.final_output
+        for attempt in range(max_retries):
+            try:
+                # Run the agent
+                result = await Runner.run(
+                    self.agent,
+                    prompt,
+                )
+                return result.final_output
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(
+                        f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"LLM call failed after {max_retries} attempts: {e}")
+                    return f"""## Error
+
+Failed to analyze anomaly after {max_retries} attempts.
+
+**Error**: {str(e)}
+
+**Anomaly Details**:
+- Step: {context.step_id}
+- Metric: {anomaly.metric_name}
+- Current Value: {anomaly.current_value:.2f}
+- Reason: {anomaly.reason}
+
+**Recommendation**: Please check the OpenAI API key and model configuration, then retry the analysis.
+"""
     
     def analyze(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """

@@ -11,18 +11,17 @@ Supports:
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional, Any
-from dataclasses import dataclass
+from pydantic import BaseModel, Field
 
 from databricks.sdk import WorkspaceClient
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit
 
-from config import get_config
+from config import get_config, _get_or_create_spark
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class MetricRecord:
+class MetricRecord(BaseModel):
     """Schema for rca.metrics_history"""
     run_id: str
     job_or_pipeline_id: str
@@ -30,9 +29,9 @@ class MetricRecord:
     step_type: str  # 'task' or 'dlt_table'
     source_tables: List[str]
     target_table: str
-    rows_in: int
-    rows_out: int
-    rows_rejected: int
+    rows_in: int = Field(ge=0)
+    rows_out: int = Field(ge=0)
+    rows_rejected: int = Field(ge=0)
     operation_type: str  # INSERT, MERGE, etc.
     execution_mode: str  # batch, streaming
     timestamp: str
@@ -51,16 +50,16 @@ class ObservabilityCollector:
         )
         
     
-    def collect_job_metrics(self, run_id: int) -> List[MetricRecord]:
+    def collect_job_metrics(self, run_id: int, job_id: int) -> List[MetricRecord]:
         """
         Collect metrics for a standard Databricks Job run.
         """
-        logger.info(f"Collecting metrics for Job Run: {run_id}")
+        logger.info(f"Collecting metrics for Job Run: {run_id} (Job {job_id})")
         
         # 1. Fetch Run Details
         try:
             run = self.client.jobs.get_run(run_id)
-            job_id = str(run.job_id)
+            # job_id passed explicitly, no need to fetch from run
         except Exception as e:
             logger.error(f"Failed to fetch run {run_id}: {e}")
             return []
@@ -95,7 +94,7 @@ class ObservabilityCollector:
                 # Collect metrics for this target table
                 record = self._collect_table_metrics(
                     run_id=str(run_id),
-                    job_id=job_id,
+                    job_id=str(job_id),
                     step_id=task_key,
                     sources=sources,
                     target=target,

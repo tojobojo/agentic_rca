@@ -7,26 +7,34 @@ Reads metrics from existing history and detects anomalies using:
 3. Execution-aware rules (e.g. DELETE operations)
 """
 import logging
-from dataclasses import dataclass
 from typing import List, Optional, Dict
 import statistics
+from pydantic import BaseModel, Field, field_validator
 
-from config import get_config
+from config import get_config, _get_or_create_spark
 from execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class Anomaly:
+class Anomaly(BaseModel):
     """Represents a detected anomaly."""
     run_id: str
     step_id: str
-    metric_name: str # 'drop_rate', 'rows_rejected', etc.
-    current_value: float
-    historical_avg: float
+    metric_name: str  # 'drop_rate', 'rows_rejected', etc.
+    current_value: float = Field(ge=0)
+    historical_avg: float = Field(ge=0)
     deviation_z_score: float
-    severity: str # 'high', 'medium', 'low'
+    severity: str  # 'high', 'medium', 'low'
     reason: str
+    
+    @field_validator('severity')
+    @classmethod
+    def validate_severity(cls, v: str) -> str:
+        """Validate severity is one of allowed values."""
+        allowed = {'high', 'medium', 'low'}
+        if v not in allowed:
+            raise ValueError(f"Severity must be one of {allowed}, got: {v}")
+        return v
 
 class AnomalyDetectionEngine:
     """
@@ -35,10 +43,7 @@ class AnomalyDetectionEngine:
     
     def __init__(self, spark_session=None):
         self.config = get_config()
-        self.spark = spark_session
-        if self.spark is None:
-             from pyspark.sql import SparkSession
-             self.spark = SparkSession.builder.getOrCreate()
+        self.spark = spark_session if spark_session is not None else _get_or_create_spark()
              
     def _fetch_history(self, job_id: str, step_id: str, limit: int = 30) -> List[Dict]:
         """Fetch historical metrics for the given step."""
@@ -132,10 +137,18 @@ class AnomalyDetectionEngine:
         avg = statistics.mean(hist_rates)
         stdev = statistics.stdev(hist_rates) if len(hist_rates) > 1 else 0.01
         
-        z_score = (current_rate - avg) / stdev if stdev > 0 else 0.0
+        # Check for insufficient variation
+        if stdev < 0.001:
+            logger.info(f"Insufficient variation in historical data for step (stdev={stdev:.4f})")
+            return None
+        
+        z_score = (current_rate - avg) / stdev
         
         # Logic: Flag if drop rate is significantly higher than normal
-        if z_score > 3.0 and current_rate > (avg + 0.1): # 3 sigma AND at least 10% worse
+        z_threshold = self.config.anomaly_z_score_threshold
+        drop_threshold = self.config.anomaly_drop_rate_threshold
+        
+        if z_score > z_threshold and current_rate > (avg + drop_threshold):
              return Anomaly(
                     run_id=latest["run_id"],
                     step_id=latest["step_id"],
@@ -156,7 +169,8 @@ class AnomalyDetectionEngine:
         
         if rejected > 0:
             rate = rejected / rows_in if rows_in > 0 else 1.0
-            if rate > 0.05: # > 5% failure
+            rejection_threshold = self.config.anomaly_rejection_rate_threshold
+            if rate > rejection_threshold:
                  return Anomaly(
                     run_id=latest["run_id"],
                     step_id=latest["step_id"],

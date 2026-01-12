@@ -20,20 +20,22 @@ from pathlib import Path
 import git
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import Task
+from pydantic import BaseModel, Field
 
 from config import get_config
 import logging
+import urllib.parse
+import hashlib
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class StepInfo:
+class StepInfo(BaseModel):
     """Represents a single step in the pipeline."""
     task_key: str
     notebook_path: str  # Databricks path
     git_file_path: Optional[str] = None  # Resolved local path
-    dependencies: List[str] = field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
     code_content: Optional[str] = None
 
 
@@ -46,6 +48,46 @@ class DiscoveryAgent:
         self.config = get_config()
         self.workspace_client: Optional[WorkspaceClient] = None
         self.repo_path: Optional[Path] = None
+    
+    def _validate_gitlab_url(self, url: str) -> bool:
+        """Validate GitLab URL format for security."""
+        try:
+            parsed = urllib.parse.urlparse(url)
+            # Only allow https/http schemes
+            if parsed.scheme not in ['https', 'http']:
+                logger.error(f"Invalid URL scheme: {parsed.scheme}. Only https/http allowed.")
+                return False
+            # Must have a network location
+            if not parsed.netloc:
+                logger.error("Invalid URL: missing hostname")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"URL validation failed: {e}")
+            return False
+    
+    def _get_repo_cache_dir(self, gitlab_url: str) -> Path:
+        """Get cache directory for a specific repository."""
+        # Use hash of URL to create unique cache directory
+        url_hash = hashlib.md5(gitlab_url.encode()).hexdigest()
+        return Path(self.config.temp_dir) / url_hash
+    
+    def _is_repo_cached(self, cache_dir: Path) -> bool:
+        """Check if repository is already cached."""
+        return cache_dir.exists() and (cache_dir / ".git").exists()
+    
+    def _update_cached_repo(self, cache_dir: Path, branch: str) -> bool:
+        """Update an existing cached repository."""
+        try:
+            repo = git.Repo(cache_dir)
+            repo.remotes.origin.fetch()
+            repo.git.checkout(branch)
+            repo.remotes.origin.pull()
+            logger.info(f"Updated cached repo at {cache_dir}")
+            return True
+        except Exception as e:
+            logger.warning(f"Cache update failed, will re-clone: {e}")
+            return False
     
     def _get_workspace_client(self) -> WorkspaceClient:
         """Initialize Databricks Workspace Client."""
@@ -106,10 +148,25 @@ class DiscoveryAgent:
     def clone_gitlab_repo(self, gitlab_url: str, branch: str = "main") -> Path:
         """
         Clone the GitLab repository to a temporary directory.
+        Uses caching to avoid re-cloning on subsequent runs.
         Returns the path to the cloned repo.
         """
+        # Validate URL for security
+        if not self._validate_gitlab_url(gitlab_url):
+            raise ValueError(f"Invalid or insecure GitLab URL: {gitlab_url}")
+        
+        # Check cache first
+        repo_dir = self._get_repo_cache_dir(gitlab_url)
+        
+        if self._is_repo_cached(repo_dir):
+            logger.info(f"Found cached repository at {repo_dir}")
+            if self._update_cached_repo(repo_dir, branch):
+                self.repo_path = repo_dir
+                return repo_dir
+            # If update failed, clean up and re-clone
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        
         # Clean up existing clone if present
-        repo_dir = Path(self.config.temp_dir) / "repo"
         if repo_dir.exists():
             shutil.rmtree(repo_dir)
         
@@ -225,13 +282,24 @@ class DiscoveryAgent:
         Resolve all steps by mapping Databricks paths to Git files
         and loading the code content.
         """
+        max_file_size = self.config.max_file_size_mb * 1024 * 1024  # Convert to bytes
+        
         for step in steps:
             git_path = self.map_databricks_path_to_git(step.notebook_path)
             if git_path:
                 step.git_file_path = git_path
                 try:
-                    with open(git_path, 'r', encoding='utf-8') as f:
-                        step.code_content = f.read()
+                    file_size = os.path.getsize(git_path)
+                    if file_size > max_file_size:
+                        logger.warning(
+                            f"File {git_path} ({file_size / 1024 / 1024:.2f}MB) exceeds "
+                            f"size limit ({self.config.max_file_size_mb}MB), truncating"
+                        )
+                        with open(git_path, 'r', encoding='utf-8') as f:
+                            step.code_content = f.read(max_file_size)
+                    else:
+                        with open(git_path, 'r', encoding='utf-8') as f:
+                            step.code_content = f.read()
                 except Exception as e:
                     logger.warning("Could not read file %s: %s", git_path, e)
             else:

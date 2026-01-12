@@ -4,18 +4,17 @@ The "Context Assembler" of the Agentic RCA system.
 Consolidates Discovery (Git) and Parsing (Logic) into a single context builder.
 """
 import logging
-from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
+from pydantic import BaseModel, Field
 
-from config import get_config
+from config import get_config, _get_or_create_spark
 from discovery_agent import DiscoveryAgent, StepInfo
 from pipeline_parser import PipelineParser, ParsedStep # Reuse existing logic for now
 from lineage_client import get_step_tables
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class ExecutionContext:
+class ExecutionContext(BaseModel):
     """Rich context for a specific execution step."""
     run_id: str
     job_id: str
@@ -33,7 +32,7 @@ class ExecutionContext:
     # Data Context
     source_tables: List[str]
     target_tables: List[str]
-    schemas: Dict[str, str] = field(default_factory=dict) # table -> ddl
+    schemas: Dict[str, str] = Field(default_factory=dict)  # table -> ddl
 
 class ExecutionContextBuilder:
     """
@@ -44,6 +43,39 @@ class ExecutionContextBuilder:
         self.config = get_config()
         self.discovery = DiscoveryAgent()
         self.parser = PipelineParser()
+        self._schema_cache: Dict[str, str] = {}  # Cache schemas to avoid repeated queries
+    
+    def _fetch_schemas(self, tables: List[str]) -> Dict[str, str]:
+        """Fetch DDL schemas for tables."""
+        schemas = {}
+        spark = _get_or_create_spark()
+        if not spark:
+            logger.warning("Spark session not available for schema fetching")
+            return schemas
+        
+        for table in tables:
+            # Check cache first
+            if table in self._schema_cache:
+                schemas[table] = self._schema_cache[table]
+                continue
+            
+            try:
+                # Fetch DDL using SHOW CREATE TABLE
+                result = spark.sql(f"SHOW CREATE TABLE {table}").collect()
+                if result:
+                    ddl = result[0][0]
+                    schemas[table] = ddl
+                    self._schema_cache[table] = ddl
+                    logger.info(f"Fetched schema for {table}")
+                else:
+                    schemas[table] = "Error: No schema returned"
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                logger.warning(f"Could not fetch schema for {table}: {e}")
+                schemas[table] = error_msg
+                self._schema_cache[table] = error_msg
+        
+        return schemas
         
     def build_context(
         self, 
@@ -91,10 +123,9 @@ class ExecutionContextBuilder:
             source_tables=source_tables, 
             target_tables=target_tables
         )
-        
         # 4. Fetch Schemas (Metadata)
-        # TODO: Implement schema fetching via Spark or UC API
-        schemas = {} 
+        all_tables = list(set(source_tables + target_tables))  # Unique tables
+        schemas = self._fetch_schemas(all_tables) if all_tables else {}
         
         return ExecutionContext(
             run_id=str(run_id),
@@ -109,4 +140,5 @@ class ExecutionContextBuilder:
             target_tables=target_tables,
             schemas=schemas
         )
+
 

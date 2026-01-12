@@ -1,23 +1,19 @@
 # Production Dependencies for Agentic RCA System
 
-# OpenAI Agents SDK
-openai-agents>=0.0.3
-
-# Databricks SDK
-databricks-sdk>=0.20.0
+# OpenAI Agents SDK (Experimental)
+openai-agents>=0.6.5
 
 # Git Operations
-gitpython>=3.1.40
-
-# Data Processing (for local testing)
-pandas>=2.0.0
-pyarrow>=14.0.0
+gitpython>=3.1.41
 
 # HTTP Client
-httpx>=0.25.0
+httpx>=0.27.0
 
 # Configuration
-python-dotenv>=1.0.0
+python-dotenv>=1.0.1
 
-# Spark (for Databricks Runtime - usually pre-installed)
-# pyspark>=3.5.0
+# Progress Indicators
+tqdm>=4.66.2
+
+# Data Validation
+pydantic>=2.6.0

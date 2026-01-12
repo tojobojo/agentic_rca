@@ -12,6 +12,10 @@ The system is **agnostic within Databricks**:
 
 A **Two-Phase Architecture** decouples continuous observability collection from on-demand AI-driven investigation, ensuring scalability, low overhead, and explainable RCA.
 
+- **Schema Fetching**: Automatic DDL retrieval using `SHOW CREATE TABLE` for complete table context
+- **Pydantic Validation**: Runtime validation for all models (Config, Anomaly, ExecutionContext, etc.)
+- **Performance Telemetry**: Built-in performance tracking with phase timers and detailed metrics reporting
+
 ---
 
 ## Architecture Diagram
@@ -25,24 +29,27 @@ graph TD
         Collector -->|Lineage| UCLineage["Unity Catalog Lineage"]
         Collector -->|Data Metrics| DeltaLog["Delta Transaction Log"]
         Collector -->|DLT Metrics| DLTMetrics["DLT Event & Expectation Metrics"]
+        Collector -->|Validation| Pydantic1["Pydantic Models"]
 
         Collector -->|Persist| MetricsDelta[("Delta Table: rca.metrics_history")]
     end
 
     subgraph "Phase 2: RCA Investigation (On-Demand)"
         Trigger["User / Alert / Failure"] --> Orchestrator["RCA Orchestrator"]
+        Orchestrator --> Telemetry["Performance Telemetry"]
 
         Orchestrator --> Context["Execution Context Builder"]
-        Context --> JobsAPI
-        Context --> UCLineage
-        Context --> CodeRepo["Repos / Git (Exact Commit)"]
+        Context -->|Code| CodeRepo["Repos / Git (Exact Commit)"]
+        Context -->|Lineage| UCLineage
+        Context -->|Schemas| SchemaFetch["Schema Fetcher (DDL)"]
+        Context -->|Validation| Pydantic2["Pydantic Models"]
 
         Orchestrator --> Validator["Anomaly Detection Engine"]
         Validator --> MetricsDelta
         Validator --> Decision{"Anomaly?"}
 
         Decision -->|Yes| RCAAgent["RCA Agent (LLM)"]
-        Decision -->|No| Report["Healthy Run Report"]
+        Decision -->|No| Report["Report with Metrics"]
 
         subgraph "Agentic Investigation Loop"
             RCAAgent -->|Tool| SQL["Spark SQL"]
@@ -52,6 +59,7 @@ graph TD
         end
 
         RCAAgent --> Report
+        Telemetry --> Report
     end
 ```
 
@@ -217,6 +225,90 @@ Confidence: High (0.87)
 
 ---
 
+## 5. Schema Fetcher
+
+### Role
+
+The **Schema Provider**. Automatically retrieves table DDL for complete schema context.
+
+### Responsibilities
+
+- Fetch DDL using `SHOW CREATE TABLE` for all source and target tables
+- Cache schemas to avoid repeated queries
+- Handle errors gracefully for inaccessible tables
+- Provide complete table structure to RCA Agent
+
+### Benefits
+
+- AI agent has full column names, types, and constraints
+- Better hypothesis generation for data quality issues
+- Improved investigation of schema-related problems
+
+---
+
+## 6. Pydantic Validation
+
+### Role
+
+The **Data Guardian**. Ensures data integrity through runtime validation.
+
+### Coverage
+
+All core models use Pydantic BaseModel:
+- `Config` - Configuration with URL and threshold validators
+- `ExecutionContext` - Execution state validation
+- `Anomaly` - Severity and value constraints
+- `StepInfo` - Pipeline step validation
+- `MetricRecord` - Row count validation
+- `PerformanceMetrics` - Telemetry data validation
+
+### Benefits
+
+- Catches invalid data at creation time
+- Clear, actionable error messages
+- Automatic JSON serialization/deserialization
+- Self-documenting field constraints
+
+---
+
+## 7. Performance Telemetry
+
+### Role
+
+The **Performance Observer**. Tracks execution time across all workflow phases.
+
+### Tracked Metrics
+
+- **Discovery Time**: Git cloning and job definition fetching
+- **Context Build Time**: Code + lineage + schema assembly per step
+- **Detection Time**: Anomaly detection across all steps
+- **Investigation Time**: AI agent analysis duration
+- **Total Time**: End-to-end workflow execution
+
+### Output
+
+Performance metrics included in final report:
+```markdown
+## Performance Metrics
+
+- **Total Execution Time**: 45.23s
+- **Discovery**: 8.12s
+- **Context Building**: 22.45s (15 steps)
+- **Anomaly Detection**: 3.21s
+- **AI Investigation**: 11.45s (3 anomalies)
+
+**Average Time per Step**: 1.50s
+```
+
+### Benefits
+
+- Identify performance bottlenecks
+- Track optimization improvements over time
+- Debug slow executions
+- Capacity planning insights
+
+---
+
 ## Key Benefits
 
 - Databricks-first and UC-native
@@ -230,3 +322,4 @@ Confidence: High (0.87)
 
 This Agentic RCA System treats Databricks pipelines as **observable execution graphs**.  
 By combining **Unity Catalog lineage**, **Delta transaction metrics**, and **agentic reasoning**, it delivers accurate, explainable root cause analysis for data anomalies across all Databricks jobs and pipelines.
+

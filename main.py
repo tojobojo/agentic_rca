@@ -9,6 +9,22 @@ Workflow:
 4. Investigation: AI Agent diagnosis for flagged steps.
 5. Reporting: Generate Markdown report.
 """
+
+import subprocess
+import sys
+
+def install_packages(packages: List[str]):
+    try:
+        import git
+        return
+    except ImportError:
+        pass
+    for package in packages:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        print(f"Installed {package}")
+
+install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0"])
+
 import argparse
 import os
 import sys
@@ -16,30 +32,49 @@ import logging
 from datetime import datetime
 from typing import List, Tuple
 
-# Ensure package imports work
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import get_config
 from observability_collector import ObservabilityCollector
 from execution_context import ExecutionContextBuilder, ExecutionContext
 from anomaly_engine import AnomalyDetectionEngine, Anomaly
 from rca_agent import RCAAgent
+from telemetry import PerformanceMetrics, PhaseTimer
+import time
 
 logger = logging.getLogger(__name__)
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm not available
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 
 import json
 
 def run_rca_orchestrator(
     job_id: int,
-    run_id: int,
+    run_id: int = None,
     collect_metrics: bool = False,
     output_path: str = "rca_report.md",
     manifest_path: str = None
 ) -> str:
     """
     Execute the RCA Orchestration flow.
+    If run_id is not provided, it finds the latest run for the job.
     """
+    from config import get_latest_run_id
+    
+    # Auto-resolve run_id if missing
+    if not run_id:
+        logger.info(f"No Run ID provided. Fetching latest run for Job {job_id}...")
+        run_id = get_latest_run_id(job_id)
+        logger.info(f"Resolved Run ID: {run_id}")
+    # Initialize telemetry
+    metrics = PerformanceMetrics()
+    workflow_start = time.time()
+    
     logger.info("=" * 60)
     logger.info("       AGENTIC RCA ORCHESTRATOR")
     logger.info("=" * 60)
@@ -68,8 +103,18 @@ def run_rca_orchestrator(
     if collect_metrics:
         logger.info("\n[Phase 1] OBSERVABILITY COLLECTION")
         collector = ObservabilityCollector()
-        collector.collect_job_metrics(run_id)
-        # We don't save return value, as it writes to Delta table which Engine reads
+        metrics = collector.collect_job_metrics(run_id, job_id)
+        
+        # Verify metrics were collected
+        if metrics:
+            logger.info(f"✓ Collected {len(metrics)} metric records")
+        else:
+            logger.warning("⚠ No metrics collected - detection may be incomplete")
+        
+        # Small delay to ensure Delta table commit completes
+        import time
+        time.sleep(2)
+        logger.info("Metrics committed to Delta table")
     
     # 2. Initialization
     ctx_builder = ExecutionContextBuilder()
@@ -80,12 +125,9 @@ def run_rca_orchestrator(
     logger.info("\n[Phase 2] CONTEXT & DETECTION")
     
     # Get tasks from Databricks API via Discovery or SDK
-    # We use discovery agent logic inside builder, but we need the list of tasks to iterate
-    # For simplicity, we ask the builder to discover steps first? 
-    # Actually, builder takes a step_id. We need to enlist steps first.
-    # Let's use the discovery agent inside the builder (accessed via private member or we instantiate one here)
-    steps = ctx_builder.discovery.discover(job_id, get_config().gitlab_url)
-    task_keys = [s.task_key for s in steps]
+    with PhaseTimer("discovery", metrics):
+        steps = ctx_builder.discovery.discover(job_id, get_config().gitlab_url)
+        task_keys = [s.task_key for s in steps]
     
     if not task_keys:
         # Fallback to fetching run tasks if discovery failed (no git connection)
@@ -99,17 +141,21 @@ def run_rca_orchestrator(
 
     anomalies_found: List[Tuple[Anomaly, ExecutionContext]] = []
     validated_steps = []
-
-    for task_key in task_keys:
+    
+    context_start = time.time()
+    for task_key in tqdm(task_keys, desc="Analyzing steps", unit="step"):
         logger.info(f"Analyzing Step: {task_key}...")
         
         try:
             # Build Context (with manifest)
+            step_start = time.time()
             context = ctx_builder.build_context(job_id, run_id, task_key, manifest_data=manifest_data)
             validated_steps.append(context)
             
             # Detect Anomalies
+            detection_start = time.time()
             step_anomalies = engine.detect_anomalies(context)
+            metrics.detection_time += (time.time() - detection_start)
             
             if step_anomalies:
                 logger.warning(f"  -> FOUND {len(step_anomalies)} ANOMALIES")
@@ -120,17 +166,26 @@ def run_rca_orchestrator(
                 
         except Exception as e:
             logger.error(f"Error processing step {task_key}: {e}")
+    
+    # Track context building time
+    metrics.context_build_time = time.time() - context_start
+    metrics.steps_analyzed = len(validated_steps)
 
     # 4. AI Investigation (Phase 3)
     rca_outputs = []
     if anomalies_found:
         logger.info(f"\n[Phase 3] AI INVESTIGATION ({len(anomalies_found)} items)")
-        rca_outputs = agent.analyze_all(anomalies_found)
+        with PhaseTimer("investigation", metrics):
+            rca_outputs = agent.analyze_all(anomalies_found)
+        metrics.anomalies_found = len(anomalies_found)
     else:
         logger.info("\n[Phase 3] No anomalies to investigate.")
+    
+    # Calculate total time
+    metrics.total_time = time.time() - workflow_start
 
     # 5. Report Generation
-    report = generate_report(job_id, run_id, validated_steps, anomalies_found, rca_outputs)
+    report = generate_report(job_id, run_id, validated_steps, anomalies_found, rca_outputs, metrics)
     
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
@@ -139,7 +194,7 @@ def run_rca_orchestrator(
 
     return report
 
-def generate_report(job_id, run_id, steps, anomalies, rca_outputs) -> str:
+def generate_report(job_id, run_id, steps, anomalies, rca_outputs, metrics: PerformanceMetrics) -> str:
     """Generate Markdown report."""
     report = f"""# RCA Report
 **Job ID**: {job_id}
@@ -149,6 +204,8 @@ def generate_report(job_id, run_id, steps, anomalies, rca_outputs) -> str:
 ## Executive Summary
 - **Steps Analyzed**: {len(steps)}
 - **Anomalies Detected**: {len(anomalies)}
+
+{metrics.report()}
 
 ---
 """
@@ -170,12 +227,13 @@ def generate_report(job_id, run_id, steps, anomalies, rca_outputs) -> str:
     return report
 
 def main():
-    parser = argparse.ArgumentParser(description="Agentic RCA Orchestrator")
+    import argparse
+    # Parse CLI Arguments
+    parser = argparse.ArgumentParser(description="Agentic Data Pipeline RCA")
     parser.add_argument("--job-id", type=int, required=True, help="Databricks Job ID")
-    parser.add_argument("--run-id", type=int, required=True, help="Databricks Run ID")
-    parser.add_argument("--collect", action="store_true", help="Run observability collection first")
-    parser.add_argument("--output", default="rca_report.md", help="Output file path")
-    parser.add_argument("--manifest", default=None, help="Path to JSON manifest with table mappings")
+    parser.add_argument("--run-id", type=int, required=False, help="Specific Run ID (optional, defaults to latest)")
+    parser.add_argument("--collect", action="store_true", help="Force metrics collection")
+    parser.add_argument("--manifest", type=str, required=False, help="Path to manifest JSON")
     
     args = parser.parse_args()
     
@@ -186,7 +244,6 @@ def main():
         job_id=args.job_id,
         run_id=args.run_id,
         collect_metrics=args.collect,
-        output_path=args.output,
         manifest_path=args.manifest
     )
 
