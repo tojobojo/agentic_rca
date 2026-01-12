@@ -34,8 +34,8 @@ def get_table_schema(table_name: str) -> str:
         DDL string describing the table schema
     """
     try:
-        from pyspark.sql import SparkSession
-        spark = SparkSession.builder.getOrCreate()
+        from config import _get_or_create_spark
+        spark = _get_or_create_spark()
         
         # Get schema
         df = spark.table(table_name)
@@ -61,8 +61,8 @@ def query_spark_sql(query: str) -> str:
         Query results as a formatted string (limited to 20 rows)
     """
     try:
-        from pyspark.sql import SparkSession
-        spark = SparkSession.builder.getOrCreate()
+        from config import _get_or_create_spark
+        spark = _get_or_create_spark()
         
         # Safety check: Only allow SELECT
         if not query.strip().upper().startswith("SELECT"):
@@ -101,10 +101,10 @@ def count_nulls_in_column(table_name: str, column_name: str) -> str:
         Count of NULL values and percentage
     """
     try:
-        from pyspark.sql import SparkSession
-        from pyspark.sql.functions import col, count, when
+        from config import _get_or_create_spark
+        import pyspark.sql.functions as F
         
-        spark = SparkSession.builder.getOrCreate()
+        spark = _get_or_create_spark()
         df = spark.table(table_name)
         
         total = df.count()
@@ -131,10 +131,9 @@ def get_delta_history(table_name: str, num_versions: int = 5) -> str:
     Returns:
         Transaction history showing operations, timestamps, and metrics
     """
+    from config import _get_or_create_spark
+    spark = _get_or_create_spark()
     try:
-        from pyspark.sql import SparkSession
-        spark = SparkSession.builder.getOrCreate()
-        
         history_df = spark.sql(f"DESCRIBE HISTORY {table_name} LIMIT {num_versions}")
         rows = history_df.select(
             "version", "timestamp", "operation", "operationParameters", "operationMetrics"

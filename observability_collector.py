@@ -43,7 +43,7 @@ class ObservabilityCollector:
     
     def __init__(self, spark: Optional[SparkSession] = None):
         self.config = get_config()
-        self.spark = spark or SparkSession.builder.getOrCreate()
+        self.spark = spark or _get_or_create_spark()
         self.client = WorkspaceClient(
             host=self.config.databricks_host,
             token=self.config.databricks_token
@@ -79,11 +79,27 @@ class ObservabilityCollector:
         # 3. Iterate through tasks
         for task in run.tasks or []:
             task_key = task.task_key
+            
+            # Detect Task Type
+            task_type = "Unknown"
+            if task.notebook_task: task_type = "Notebook"
+            elif task.spark_python_task: task_type = "Python Script"
+            elif task.spark_jar_task: task_type = "JAR"
+            elif task.sql_task: task_type = "SQL"
+            elif task.dbt_task: task_type = "dbt"
+            elif task.pipeline_task: task_type = "DLT Pipeline"
+            elif task.condition_task: task_type = "Condition (If/Else)"
+            
+            # Skip non-data tasks explicitly
+            # if task.condition_task:
+            #     logger.info(f"Skipping Task '{task_key}' (Type: {task_type}) - Logical control flow only.")
+            #     continue
+
             tables = table_map.get(task_key, {})
             sources = tables.get("sources", [])
             targets = tables.get("targets", [])
             
-            logger.info(f"Task {task_key}: Sources={sources}, Targets={targets}")
+            logger.info(f"Processing Task '{task_key}' (Type: {task_type}): Sources={sources}, Targets={targets}")
             
             if not targets:
                 # If no targets known, we can't collect meaningful output metrics

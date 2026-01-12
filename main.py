@@ -227,15 +227,14 @@ def generate_report(job_id, run_id, steps, anomalies, rca_outputs, metrics: Perf
     return report
 
 def main():
-    import argparse
-    # Parse CLI Arguments
-    parser = argparse.ArgumentParser(description="Agentic Data Pipeline RCA")
-    parser.add_argument("--job-id", type=int, required=True, help="Databricks Job ID")
-    parser.add_argument("--run-id", type=int, required=False, help="Specific Run ID (optional, defaults to latest)")
-    parser.add_argument("--collect", action="store_true", help="Force metrics collection")
-    parser.add_argument("--manifest", type=str, required=False, help="Path to manifest JSON")
+    from config import get_runtime_args
     
-    args = parser.parse_args()
+    # Use Hybrid Argument Parser (CLI or Widgets)
+    args = get_runtime_args()
+    
+    if not args.job_id:
+        logger.error("Job ID is required! Pass --job-id (CLI) or set 'job_id' widget.")
+        return
     
     # Setup logging
     logging.basicConfig(level=logging.INFO, format='%(message)s')

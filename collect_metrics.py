@@ -33,13 +33,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Collect metrics for Databricks job run (Phase 1)"
-    )
-    parser.add_argument("--job-id", type=int, required=True, help="Databricks Job ID")
-    parser.add_argument("--run-id", type=int, required=False, help="Specific Run ID (optional, defaults to latest)")
+    from config import get_runtime_args
     
-    args = parser.parse_args()
+    args = get_runtime_args()
+    
+    if not args.job_id:
+        logger.error("Job ID is required! Pass --job-id (CLI) or set 'job_id' widget.")
+        return
     
     run_id = args.run_id
     if not run_id:

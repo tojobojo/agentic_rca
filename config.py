@@ -8,11 +8,90 @@ import logging
 from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from dotenv import load_dotenv
+import sys
+import argparse
 
 # Load environment variables from .env file if present
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+def _get_or_create_spark():
+    """Helper to get existing spark session or create new one."""
+    from pyspark.sql import SparkSession
+    try:
+        spark = SparkSession.builder.getOrCreate()
+        return spark
+    except Exception:
+        # Fallback for local testing if needed
+        return None
+
+def get_dbutils(spark):
+    """Safely get dbutils."""
+    try:
+        from pyspark.dbutils import DBUtils
+        return DBUtils(spark)
+    except ImportError:
+        return None
+
+def get_runtime_args():
+    """
+    Hybrid argument parser for Databricks.
+    Supports both Jobs (CLI args) and Interactive (Widgets).
+    """
+    # 1. Try parsing CLI args first (if standard flags are present)
+    # We check for --job-id specifically to distinguish from default kernel args
+    if any("--job-id" in arg for arg in sys.argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--job-id", type=int, required=True)
+        parser.add_argument("--run-id", type=int, required=False)
+        parser.add_argument("--collect", action="store_true")
+        parser.add_argument("--manifest", type=str, required=False)
+        
+        # Only parse known args to avoid conflict with Databricks internal args
+        args, _ = parser.parse_known_args()
+        return args
+
+    # 2. Fallback to Widgets (Interactive Mode)
+    spark = _get_or_create_spark()
+    dbutils = get_dbutils(spark)
+    
+    if dbutils:
+        # Define widgets so they appear in UI
+        try:
+            dbutils.widgets.text("job_id", "", "1. Job ID (Required)")
+            dbutils.widgets.text("run_id", "", "2. Run ID (Optional)")
+            dbutils.widgets.dropdown("collect", "false", ["true", "false"], "3. Collect Metrics?")
+            dbutils.widgets.text("manifest", "", "4. Manifest Path (Optional)")
+        except: pass # Widgets might already exist
+        
+        # Parse values
+        class Args:
+            pass
+        args = Args()
+        
+        j_id = dbutils.widgets.get("job_id")
+        r_id = dbutils.widgets.get("run_id")
+        coll = dbutils.widgets.get("collect")
+        mani = dbutils.widgets.get("manifest")
+        
+        args.job_id = int(j_id) if j_id.strip() else None
+        args.run_id = int(r_id) if r_id.strip() else None
+        args.collect = (coll.lower() == "true")
+        args.manifest = mani if mani.strip() else None
+        
+        if not args.job_id:
+            logger.warning("No Job ID provided via widgets.")
+            
+        return args
+    
+    # 3. Local fallback (Empty)
+    class EmptyArgs:
+        job_id = None
+        run_id = None
+        collect = False
+        manifest = None
+    return EmptyArgs()
 
 class Config(BaseModel):
     """Configuration settings for the RCA system."""
@@ -114,8 +193,7 @@ class Config(BaseModel):
         This is the recommended method when running on Databricks.
         """
         try:
-            from pyspark.sql import SparkSession
-            spark = SparkSession.builder.getOrCreate()
+            spark = _get_or_create_spark()
             dbutils = None
             # Get dbutils in Databricks environment
             try:
@@ -156,15 +234,7 @@ def get_config() -> Config:
     return _config
 
 
-def _get_or_create_spark():
-    """Helper to get existing spark session or create new one."""
-    from pyspark.sql import SparkSession
-    try:
-        spark = SparkSession.builder.getOrCreate()
-        return spark
-    except Exception:
-        # Fallback for local testing if needed
-        return None
+
 
 def get_latest_run_id(job_id: int) -> int:
     """Fetch the latest run ID for a given job."""
