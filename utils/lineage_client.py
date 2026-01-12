@@ -5,7 +5,7 @@ Integrates with Unity Catalog Lineage API to discover table dependencies.
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
-from config import get_config, _get_or_create_spark
+from config.config import get_config, _get_or_create_spark
 import logging
 
 logger = logging.getLogger(__name__)

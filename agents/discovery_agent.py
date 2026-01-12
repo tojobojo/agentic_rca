@@ -22,7 +22,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import Task
 from pydantic import BaseModel, Field
 
-from config import get_config
+from config.config import get_config
 import logging
 import urllib.parse
 import hashlib

@@ -7,24 +7,22 @@ Can be run independently or scheduled as a Databricks Job.
 
 import subprocess
 import sys
+from typing import List
 
 def install_packages(packages: List[str]):
-    try:
-        import git
-        return
-    except ImportError:
-        pass
+    # Always run pip install to ensure all requirements are met
+    pass
     for package in packages:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         print(f"Installed {package}")
 
-install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0"])
+install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
 
 
 import argparse
 import logging
-from observability_collector import ObservabilityCollector
-from config import get_config, get_latest_run_id
+from collectors.observability_collector import ObservabilityCollector
+from config.config import get_config, get_latest_run_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +31,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
-    from config import get_runtime_args
+    from config.config import get_runtime_args
     
     args = get_runtime_args()
     

@@ -17,7 +17,7 @@ from databricks.sdk import WorkspaceClient
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit
 
-from config import get_config, _get_or_create_spark
+from config.config import get_config, _get_or_create_spark
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class ObservabilityCollector:
         
         # 2. Get Lineage (Source/Target Tables)
         # We use the existing lineage_client logic which supports a fallback manifest
-        from lineage_client import get_step_tables
+        from utils.lineage_client import get_step_tables
         task_keys = [t.task_key for t in run.tasks or []]
         table_map = get_step_tables(run.job_id, task_keys) # Returns {task_key: {sources: [], targets: []}}
         

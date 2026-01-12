@@ -11,9 +11,9 @@ from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 import asyncio
 
-from anomaly_engine import Anomaly
-from execution_context import ExecutionContext
-from config import get_config
+from core.anomaly_engine import Anomaly
+from core.execution_context import ExecutionContext
+from config.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def get_table_schema(table_name: str) -> str:
         DDL string describing the table schema
     """
     try:
-        from config import _get_or_create_spark
+        from config.config import _get_or_create_spark
         spark = _get_or_create_spark()
         
         # Get schema
@@ -61,7 +61,7 @@ def query_spark_sql(query: str) -> str:
         Query results as a formatted string (limited to 20 rows)
     """
     try:
-        from config import _get_or_create_spark
+        from config.config import _get_or_create_spark
         spark = _get_or_create_spark()
         
         # Safety check: Only allow SELECT
@@ -101,7 +101,7 @@ def count_nulls_in_column(table_name: str, column_name: str) -> str:
         Count of NULL values and percentage
     """
     try:
-        from config import _get_or_create_spark
+        from config.config import _get_or_create_spark
         import pyspark.sql.functions as F
         
         spark = _get_or_create_spark()
@@ -131,7 +131,7 @@ def get_delta_history(table_name: str, num_versions: int = 5) -> str:
     Returns:
         Transaction history showing operations, timestamps, and metrics
     """
-    from config import _get_or_create_spark
+    from config.config import _get_or_create_spark
     spark = _get_or_create_spark()
     try:
         history_df = spark.sql(f"DESCRIBE HISTORY {table_name} LIMIT {num_versions}")

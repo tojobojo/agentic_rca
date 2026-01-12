@@ -11,8 +11,8 @@ from typing import List, Optional, Dict
 import statistics
 from pydantic import BaseModel, Field, field_validator
 
-from config import get_config, _get_or_create_spark
-from execution_context import ExecutionContext
+from config.config import get_config, _get_or_create_spark
+from core.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 

@@ -7,10 +7,10 @@ import logging
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
-from config import get_config, _get_or_create_spark
-from discovery_agent import DiscoveryAgent, StepInfo
-from pipeline_parser import PipelineParser, ParsedStep # Reuse existing logic for now
-from lineage_client import get_step_tables
+from config.config import get_config, _get_or_create_spark
+from agents.discovery_agent import DiscoveryAgent, StepInfo
+from utils.pipeline_parser import PipelineParser, ParsedStep # Reuse existing logic for now
+from utils.lineage_client import get_step_tables
 
 logger = logging.getLogger(__name__)
 

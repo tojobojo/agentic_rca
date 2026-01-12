@@ -12,18 +12,16 @@ Workflow:
 
 import subprocess
 import sys
+from typing import List
 
 def install_packages(packages: List[str]):
-    try:
-        import git
-        return
-    except ImportError:
-        pass
+    # Always run pip install to ensure all requirements are met
+    pass
     for package in packages:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         print(f"Installed {package}")
 
-install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0"])
+install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
 
 import argparse
 import os
@@ -33,12 +31,12 @@ from datetime import datetime
 from typing import List, Tuple
 
 
-from config import get_config
-from observability_collector import ObservabilityCollector
-from execution_context import ExecutionContextBuilder, ExecutionContext
-from anomaly_engine import AnomalyDetectionEngine, Anomaly
-from rca_agent import RCAAgent
-from telemetry import PerformanceMetrics, PhaseTimer
+from config.config import get_config
+from collectors.observability_collector import ObservabilityCollector
+from core.execution_context import ExecutionContextBuilder, ExecutionContext
+from core.anomaly_engine import AnomalyDetectionEngine, Anomaly
+from agents.rca_agent import RCAAgent
+from utils.telemetry import PerformanceMetrics, PhaseTimer
 import time
 
 logger = logging.getLogger(__name__)
@@ -64,7 +62,7 @@ def run_rca_orchestrator(
     Execute the RCA Orchestration flow.
     If run_id is not provided, it finds the latest run for the job.
     """
-    from config import get_latest_run_id
+    from config.config import get_latest_run_id
     
     # Auto-resolve run_id if missing
     if not run_id:
@@ -227,7 +225,7 @@ def generate_report(job_id, run_id, steps, anomalies, rca_outputs, metrics: Perf
     return report
 
 def main():
-    from config import get_runtime_args
+    from config.config import get_runtime_args
     
     # Use Hybrid Argument Parser (CLI or Widgets)
     args = get_runtime_args()

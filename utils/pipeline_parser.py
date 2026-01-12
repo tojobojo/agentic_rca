@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from discovery_agent import StepInfo
+from agents.discovery_agent import StepInfo
 import logging
 
 logger = logging.getLogger(__name__)
