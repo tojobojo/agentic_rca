@@ -151,17 +151,18 @@ if st.session_state['job_tasks']:
                         # Analyze
                         mapping = agent.analyze_code(code_context)
                         
-                        # Show Trace
-                        with st.expander("🕵️ Analysis Trace & Files"):
-                            st.write("**Files Analyzed:**")
-                            st.json([k for k in code_context if k != "__metadata__"])
-                            
-                            st.write("**Resolution Steps:**")
-                            if mapping.resolution_trace:
-                                for step in mapping.resolution_trace:
-                                    st.text(step)
-                            else:
-                                st.info("No trace provided by agent.")
+                        # Show Trace (Directly in status, no nested expander)
+                        st.markdown("---")
+                        st.caption("**Files Analyzed:**")
+                        st.json([k for k in code_context if k != "__metadata__"])
+                        
+                        st.caption("**Resolution Steps:**")
+                        if mapping.resolution_trace:
+                            for step in mapping.resolution_trace:
+                                st.text(step)
+                        else:
+                            st.info("No trace provided.")
+                        st.markdown("---")
 
                         results[task['task_key']] = {
                             "sources": mapping.sources,
