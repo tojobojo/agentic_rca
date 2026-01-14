@@ -97,10 +97,16 @@ Rules:
         # Only prune if we have enough files to warrant it (e.g. > 3)
         if len(all_files) > 3:
             resolution_trace.append(f"Pruning context from {len(all_files)} files...")
-            try:
                 prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
-                relevant_files = await Runner.run(self.pruner, prompt) # Expects List[str]
+                result = await Runner.run(self.pruner, prompt)
                 
+                # Extract list from RunResult
+                if hasattr(result, "final_output_as"):
+                    relevant_files = result.final_output_as(list)
+                else:
+                    # Fallback if it returns raw data or something else (unlikely given the error)
+                    relevant_files = result
+
                 # Safety net: Ensure we didn't lose everything or config files
                 # (The Agent instructions say always keep conf/, but let's double check code_context keys)
                 # Actually, let's just trust the LLM but fallback if empty
@@ -169,15 +175,49 @@ Rules:
                         resolution_trace.append(f"  Unresolved {op} at line {io['line']}")
 
             # --- Handler: SQL ---
+            # --- Handler: SQL ---
             elif filename.endswith(".sql"):
-                # Simple Regex for now
+                # Robust SQL Extraction
+                # 1. Identify CTEs to exclude (e.g. "WITH cte_name AS")
+                cte_names = set(re.findall(r"WITH\s+([a-zA-Z0-9_]+)\s+AS", content, re.IGNORECASE))
+                
+                # 2. Keywords to Ignore
+                sql_keywords = {
+                    "SELECT", "FROM", "WHERE", "JOIN", "AND", "OR", "ON", "IN", "NOT", "NULL", 
+                    "GROUP", "ORDER", "BY", "HAVING", "LIMIT", "UNION", "ALL", "LEFT", "RIGHT", 
+                    "INNER", "OUTER", "CROSS", "LATERAL", "VALUES", "UNNEST", "PARTITION", 
+                    "OVER", "DISTINCT", "CASE", "WHEN", "THEN", "ELSE", "END", "JSON"
+                }
+
+                # Helper to process extracted tokens
+                def process_sql_token(token, op):
+                    # Filter: Keywords
+                    if token.upper() in sql_keywords: return
+                    # Filter: CTEs
+                    if token in cte_names: return
+                    # Filter: Numbers or Invalid Start
+                    if token[0].isdigit(): return
+
+                    # Confidence Logic
+                    conf = "HIGH"
+                    evidence = "SQL Regex Extraction"
+                    
+                    if "." not in token:
+                        # Single word identifier -> High chance of being an alias or local view
+                        conf = "LOW" 
+                        evidence += " (No Schema Qualifier, likely alias)"
+                    
+                    self._add_asset(found_assets, resolution_trace, token, op, conf, evidence)
+
+                # Sources: FROM x, JOIN y
                 sources = re.findall(r"(?:FROM|JOIN)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
                 for s in sources:
-                    self._add_asset(found_assets, resolution_trace, s, "READ", "HIGH", "SQL Regex Extraction")
+                    process_sql_token(s, "READ")
                     
+                # Targets: INSERT INTO z, MERGE INTO w
                 targets = re.findall(r"(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
                 for t in targets:
-                    self._add_asset(found_assets, resolution_trace, t, "WRITE", "HIGH", "SQL Regex Extraction")
+                    process_sql_token(t, "WRITE")
 
         # --- Layer 4: LLM Logic Summary (Optional) ---
         logic_summary = f"Identified {len(found_assets)} assets using Config-Driven Resolution."
