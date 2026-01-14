@@ -166,7 +166,9 @@ if st.session_state['job_tasks']:
                         results[task['task_key']] = {
                             "sources": mapping.sources,
                             "targets": mapping.targets,
-                            "logic": mapping.logic_summary
+                            "logic": mapping.logic_summary,
+                            "trace": mapping.resolution_trace,
+                            "files": [k for k in code_context if k != "__metadata__"]
                         }
                     else:
                         error_msg = code_context.get("error.txt", "Unknown Error") if isinstance(code_context, dict) else str(code_context)
@@ -199,15 +201,35 @@ if st.session_state['analysis_results']:
     
     edited_df = st.data_editor(
         df,
+        num_rows="dynamic",
         use_container_width=True,
-        num_rows="fixed",
+        key="editor",
         column_config={
             "Task Key": st.column_config.TextColumn(disabled=True),
-            "Logic Summary": st.column_config.TextColumn(disabled=True),
+            "Logic Summary": st.column_config.TextColumn(width="large"),
             "Source Tables": st.column_config.TextColumn("Source Tables (comma-separated)", required=True),
             "Target Tables": st.column_config.TextColumn("Target Tables (comma-separated)", required=True),
         }
     )
+
+    st.markdown("#### 🕵️ Detailed Analysis Review")
+    selected_task_key = st.selectbox("Select Task to View Details:", options=df["Task Key"].tolist())
+    
+    if selected_task_key:
+        task_data = st.session_state['analysis_results'].get(selected_task_key, {})
+        with st.container(border=True):
+             col1, col2 = st.columns(2)
+             with col1:
+                 st.write("**Files Analyzed:**")
+                 st.json(task_data.get("files", []))
+             with col2:
+                 st.write("**Resolution Trace:**")
+                 trace = task_data.get("trace", [])
+                 if trace:
+                     for step in trace:
+                         st.text(step)
+                 else:
+                     st.info("No trace available.")
     
     if st.button("💾 Save Manifest"):
         # Convert back to JSON format

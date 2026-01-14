@@ -85,6 +85,13 @@ class MappingAgent:
         
         try:
             result = await Runner.run(self.agent, prompt)
+            
+            # Log the trace for visibility
+            if result.final_output.resolution_trace:
+                logger.info(f"Resolution Trace for {file_names}:")
+                for step in result.final_output.resolution_trace:
+                    logger.info(f"  -> {step}")
+            
             return result.final_output
         except Exception as e:
             logger.error(f"Agent analysis failed: {e}")
