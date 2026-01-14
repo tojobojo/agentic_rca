@@ -1,0 +1,620 @@
+I am getting variable names when i use agents 
+
+That’s expected — and it’s actually the core failure mode of naïve agentic lineage extraction.
+
+You’re hitting the point where the agent can see I/O calls, but cannot resolve variables to concrete table names. The fix is not “better prompting” alone — you need symbol resolution + partial execution reasoning before the LLM step.
+
+Below is a practical, battle-tested way to move from variables → real tables.
+
+1. Why your agent returns variable names
+
+Example:
+
+target_table = f"{env}.{schema}.{table}"
+df.write.saveAsTable(target_table)
+
+
+Your agent reports:
+
+WRITE → target_table
+
+
+Because:
+
+LLM sees symbols, not values
+
+Values are:
+
+Defined elsewhere
+
+Loaded from config
+
+Passed via job parameters
+
+Computed at runtime
+
+LLMs cannot guess values safely.
+
+2. Correct solution: 3-layer resolution pipeline
+
+You must separate extraction, resolution, and inference.
+
+Code → Symbols → Resolved Values → Lineage
+
+3. Layer 1: Deterministic symbol extraction (NO LLM)
+
+Use Python AST to extract:
+
+Assignments
+
+Function parameters
+
+f-strings
+
+Dict lookups
+
+Env reads
+
+Example extraction output
+{
+  "target_table": {
+    "expression": "f'{env}.{schema}.{table}'",
+    "dependencies": ["env", "schema", "table"]
+  }
+}
+
+
+This is mechanical, not intelligent.
+
+4. Layer 2: Variable resolution (this fixes your issue)
+4.1 Resolve from configs
+
+Scan:
+
+YAML / JSON
+
+.conf
+
+dbutils.widgets
+
+spark.conf.get()
+
+env: prod
+schema: analytics
+table: customer_metrics
+
+
+→ resolved
+
+4.2 Resolve from job parameters
+
+Databricks job JSON:
+
+{
+  "base_parameters": {
+    "env": "prod"
+  }
+}
+
+4.3 Resolve from constants
+SCHEMA = "analytics"
+
+
+Track module-level constants.
+
+4.4 Partial evaluation (safe!)
+
+Evaluate only string expressions:
+
+env = "prod"
+schema = "analytics"
+table = "customer_metrics"
+target = f"{env}.{schema}.{table}"
+
+
+⚠️ Never evaluate arbitrary code.
+
+5. Layer 3: LLM inference (NOW it works)
+
+Only after partial resolution do you call the agent.
+
+Good prompt (key idea)
+
+You are given resolved variable values and unresolved symbols.
+Return concrete tables where possible.
+If unresolved, mark as LOW confidence.
+
+Example agent output
+{
+  "targets": [
+    {
+      "table": "prod.analytics.customer_metrics",
+      "confidence": "HIGH",
+      "evidence": "Resolved f-string using job parameters and config"
+    }
+  ]
+}
+
+6. Confidence scoring (critical)
+Situation	Confidence
+All vars resolved	HIGH
+Some vars resolved	MEDIUM
+Only symbol name	LOW
+
+Never collapse this.
+
+7. Fallback: runtime confirmation (optional but powerful)
+
+If allowed:
+
+Query DESCRIBE HISTORY in job time window
+
+Match job_id / user
+
+This lets you upgrade confidence.
+
+8. Reference architecture (minimal but complete)
+WHL unzip
+ ├── AST parse (no LLM)
+ ├── Config scan
+ ├── Job param scan
+ ├── String resolver
+ ├── LLM inference
+ ├── Validation
+ └── Delta output
+
+9. Common mistake to avoid (important)
+
+❌ Asking the LLM:
+
+“What tables does this job use?”
+
+✅ Asking the LLM:
+
+“Given these resolved expressions and unresolved symbols, infer the most likely concrete tables and explain uncertainty.”
+
+This single change fixes 80% of bad outputs.
+
+10. If you want, I can give you:
+
+✅ A Python AST resolver snippet
+
+✅ A safe f-string evaluator
+
+✅ A Databricks job JSON parser
+
+✅ A production prompt
+
+✅ A confidence-scoring function
+
+Tell me:
+
+Are table names mostly config-driven or code-driven?
+
+Do you have access to job run JSON?
+
+Python only, or PySpark + SQL files?
+
+I’ll tailor the exact implementation for your setup.
+
+onfig-driven
+
+Great — config-driven makes this solvable in a clean, reliable way 👍
+This is the best-case scenario for an agentic lineage approach.
+
+Below is a concrete, opinionated blueprint that will stop variables from leaking into your output and give you real table names with confidence scoring.
+
+1. What “config-driven” enables
+
+Because table names live in config files:
+
+YAML / JSON is authoritative
+
+Code becomes a template
+
+LLM’s job is reasoning, not guessing
+
+Your pipeline should treat configs as ground truth, not suggestions.
+
+2. Canonical architecture (config-first)
+WHL
+ ├── code (.py)
+ ├── configs (.yaml / .json)
+ └── job params
+        ↓
+CONFIG RESOLUTION  ← source of truth
+        ↓
+AST extraction (symbols only)
+        ↓
+SAFE string evaluation
+        ↓
+LLM reasoning (edge cases only)
+        ↓
+Validated lineage (with confidence)
+
+
+⚠️ LLM is last, not first
+
+3. Step-by-step implementation
+Step 1: Load and normalize configs (CRITICAL)
+
+Support:
+
+Environment overlays
+
+Defaults
+
+Inheritance
+
+Example:
+
+defaults:
+  env: prod
+  schema: analytics
+
+tables:
+  source:
+    customers: "{{env}}.sales.customers"
+  target:
+    metrics: "{{env}}.analytics.customer_metrics"
+
+
+Normalize into:
+
+{
+  "env": "prod",
+  "tables.source.customers": "prod.sales.customers",
+  "tables.target.metrics": "prod.analytics.customer_metrics"
+}
+
+
+👉 This step alone resolves most variables.
+
+Step 2: Map code variables → config keys
+
+Example code:
+
+source = cfg["tables"]["source"]["customers"]
+df = spark.table(source)
+
+
+Build a mapping:
+
+{
+  "source": "prod.sales.customers"
+}
+
+
+Now the agent never sees "source" — only the value.
+
+Step 3: AST extraction (no LLM)
+
+Extract only I/O sites:
+
+spark.table(X)
+df.write.saveAsTable(Y)
+
+
+After resolution:
+
+{
+  "reads": ["prod.sales.customers"],
+  "writes": ["prod.analytics.customer_metrics"]
+}
+
+4. Safe string resolution (for templates)
+
+Handle:
+
+{{ }} (Jinja-style)
+
+f-strings
+
+.format()
+
+But only for strings.
+
+Example:
+
+target = f"{cfg['env']}.{cfg['schema']}.customer_metrics"
+
+
+Resolved safely using known config values.
+
+❌ Never execute Python code
+✅ Only substitute strings
+
+5. Where the LLM actually adds value (narrow scope)
+
+Use the LLM ONLY when:
+
+Case	Example
+Multiple possible configs	env-specific overrides
+Indirect function calls	wrapper functions
+Ambiguous writes	conditional branches
+
+Prompt it like this:
+
+Given resolved config values and unresolved symbols, infer concrete table names or mark as LOW confidence.
+
+6. Output model (final product)
+{
+  "job": "customer_metrics_job",
+  "sources": [
+    {
+      "table": "prod.sales.customers",
+      "confidence": "HIGH",
+      "evidence": "Config key tables.source.customers"
+    }
+  ],
+  "targets": [
+    {
+      "table": "prod.analytics.customer_metrics",
+      "confidence": "HIGH",
+      "evidence": "Config key tables.target.metrics"
+    }
+  ]
+}
+
+
+No variable names. Ever.
+
+7. Confidence rules (simple & defensible)
+Resolution	Confidence
+Direct config reference	HIGH
+Derived from config	HIGH
+Partial template	MEDIUM
+LLM inference	MEDIUM
+Unresolved symbol	LOW
+8. Common pitfalls (avoid these)
+
+❌ Letting LLM see raw code
+❌ Treating configs as optional
+❌ Mixing extraction and inference
+❌ Returning “best guess” without confidence
+
+9. Minimal tooling you need
+
+Python AST
+
+YAML / JSON loader
+
+Jinja / f-string resolver
+
+(Optional) GPT-4-class model
+
+Delta table for output
+
+No heavy infra needed.
+
+10. Sanity check (important question)
+
+Before going further, answer this:
+
+👉 Are configs fully resolved at deploy time (single env), or selected at runtime (dev/prod switch)?
+
+If deploy-time → 95% accuracy possible
+
+If runtime → we add env-scoped lineage rows
+
+Once I know that, I can give you:
+
+A ready-to-run resolver
+
+Exact AST patterns
+
+A production prompt
+
+A confidence scoring function
+
+You’re very close to a clean solution — config-driven is the hard part already solved.
+
+sources and targets can be adls as welll
+
+Perfect — that’s an important detail, and it changes the design slightly but cleanly.
+
+When sources and targets can be ADLS paths, the goal is no longer “tables only” but “data assets” (tables + file paths). Your agent must treat paths as first-class lineage entities, not as a fallback.
+
+Below is a clear, production-grade way to handle this without losing accuracy.
+
+1. Expand the lineage model (table ≠ only asset)
+Unified asset schema
+{
+  "type": "TABLE | FILE",
+  "identifier": "string",
+  "format": "delta | parquet | csv | unknown",
+  "confidence": "HIGH | MEDIUM | LOW",
+  "evidence": "string"
+}
+
+
+Examples:
+
+TABLE → prod.sales.customers
+
+FILE → abfss://raw@datalake.dfs.core.windows.net/customers/
+
+2. Deterministic detection (NO LLM)
+2.1 Table reads/writes
+spark.table("db.schema.table")
+df.write.saveAsTable("db.schema.table")
+
+2.2 ADLS reads
+
+Detect:
+
+spark.read.format("delta").load(path)
+spark.read.parquet(path)
+spark.read.csv(path)
+
+
+AST extract:
+
+{
+  "operation": "READ",
+  "type": "FILE",
+  "path_expr": "raw_customer_path"
+}
+
+2.3 ADLS writes
+df.write.format("delta").mode("overwrite").save(path)
+df.write.parquet(path)
+
+3. Config-driven path resolution (critical)
+
+Example config:
+
+storage:
+  raw:
+    container: raw
+    account: datalake
+    customers: "abfss://raw@datalake.dfs.core.windows.net/customers/"
+
+
+Resolve to:
+
+{
+  "raw.customers": "abfss://raw@datalake.dfs.core.windows.net/customers/"
+}
+
+
+Now your agent sees:
+
+WRITE FILE → abfss://raw@datalake.dfs.core.windows.net/customers/
+
+
+Not raw_customer_path.
+
+4. Safe string resolution for paths
+
+Support:
+
+f-strings
+
+.format
+
+Jinja templates
+
+Example:
+
+path = f"abfss://{container}@{account}.dfs.core.windows.net/{folder}/"
+
+
+Resolve using config keys.
+
+⚠️ Same rule: strings only, no execution
+
+5. Heuristics for ADLS paths (important)
+Normalize paths
+
+Treat these as the same asset:
+
+/mnt/raw/customers
+abfss://raw@lake.dfs.core.windows.net/customers
+
+
+Store both:
+
+{
+  "identifier": "abfss://raw@lake.dfs.core.windows.net/customers",
+  "aliases": ["/mnt/raw/customers"]
+}
+
+Format inference
+
+If:
+
+.format("delta") or _delta_log → delta
+
+.parquet() → parquet
+
+.csv() → csv
+
+Else:
+
+"format": "unknown"
+
+6. LLM usage (now very narrow)
+
+Use LLM only when:
+
+Path is built across multiple config keys
+
+Conditional storage selection
+
+Indirect helper functions
+
+Prompt example:
+
+Given resolved config values and unresolved expressions, infer the most likely ADLS path or mark LOW confidence.
+
+7. Output example (table + ADLS)
+{
+  "sources": [
+    {
+      "type": "TABLE",
+      "identifier": "prod.sales.customers",
+      "confidence": "HIGH",
+      "evidence": "spark.table(config.tables.source.customers)"
+    },
+    {
+      "type": "FILE",
+      "identifier": "abfss://raw@datalake.dfs.core.windows.net/orders/",
+      "format": "delta",
+      "confidence": "HIGH",
+      "evidence": "spark.read.format('delta').load(config.storage.raw.orders)"
+    }
+  ],
+  "targets": [
+    {
+      "type": "FILE",
+      "identifier": "abfss://curated@datalake.dfs.core.windows.net/customer_metrics/",
+      "format": "delta",
+      "confidence": "HIGH"
+    }
+  ]
+}
+
+8. Confidence scoring (extended)
+Case	Confidence
+Resolved config path	HIGH
+Derived path (string ops)	HIGH
+Env-dependent path	MEDIUM
+LLM inferred	MEDIUM
+Unresolved	LOW
+9. What this still cannot guarantee (be explicit)
+
+❌ Runtime-generated subfolders (dates, UUIDs)
+❌ Pandas file I/O
+❌ External mounts created at runtime
+
+For these:
+
+Capture base path
+
+Mark as MEDIUM
+
+10. Strong recommendation (this will help a lot)
+
+If you control the codebase:
+
+Centralize ALL paths in config
+
+Ban inline abfss://... strings
+
+Wrap I/O in helper functions
+
+Example:
+
+read_delta("raw.customers")
+write_delta(df, "curated.customer_metrics")
+
+
+This makes lineage extraction almost trivial.
+
+11. Bottom line
+
+✔ Yes, ADLS paths fit very well into an agentic, config-driven approach
+✔ Treat them as assets, not exceptions
+✔ Resolve configs first, infer later
+✔ Always emit confidence + evidence

@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict
 from dotenv import load_dotenv
 
@@ -10,7 +10,12 @@ load_dotenv()
 os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
 
-from agents.extensions.models.litellm_model import LitellmModel
+try:
+    from agents.extensions.models.litellm_model import LitellmModel
+except ImportError:
+    LitellmModel = None
+    pass
+
 from agents import set_tracing_disabled, ModelSettings
 
 set_tracing_disabled(True)
@@ -25,10 +30,12 @@ class UIConfig(BaseModel):
     # LLM settings
     llm_model: str = os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
 
-    model: LitellmModel = LitellmModel(
-        model=llm_model,
-        api_key=databricks_token
-    )
+    model: Optional[Any] = None
+    if LitellmModel:
+        model: LitellmModel = LitellmModel(
+            model=llm_model,
+            api_key=databricks_token
+        )
 
     # Model Settings
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))

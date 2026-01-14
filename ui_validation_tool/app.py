@@ -65,6 +65,9 @@ with st.sidebar:
     st.markdown("### 🔑 API Config")
     st.info("Configuration loaded from Environment Variables.")
     
+    st.markdown("### ⚙️ Job Parameters")
+    job_params_input = st.text_area("JSON Parameters", value='{"env": "prod"}', height=100)
+    
     st.markdown("---")
     st.markdown("### ℹ️ Help")
     st.markdown("1. Enter **Job ID**.\n2. **Select Tasks** to analyze.\n3. **Run AI Analysis** to map lineage.\n4. **Validate** & **Save** manifest.")
@@ -148,7 +151,12 @@ if st.session_state['job_tasks']:
                         file_count = len([k for k in code_context if k != "__metadata__"])
                         st.caption(f"Found {file_count} file(s).")
                         
-                        # Analyze
+                        # Add Job Params to Metadata for ConfigLoader
+                        if job_params_input:
+                            current_meta = code_context.get("__metadata__", "")
+                            code_context["__metadata__"] = f"{current_meta}\nParameters: {job_params_input}"
+                        
+                        # Analyze (returns HybridResult)
                         mapping = agent.analyze_code(code_context)
                         
                         # Show Trace (Directly in status, no nested expander)
@@ -164,9 +172,14 @@ if st.session_state['job_tasks']:
                             st.info("No trace provided.")
                         st.markdown("---")
 
+                        # Filter Assets
+                        sources = [a for a in mapping.assets if a.usage == "SOURCE"]
+                        targets = [a for a in mapping.assets if a.usage == "TARGET"]
+
                         results[task['task_key']] = {
-                            "sources": mapping.sources,
-                            "targets": mapping.targets,
+                            "sources": [a.identifier for a in sources],
+                            "targets": [a.identifier for a in targets],
+                            "assets": [a.model_dump() for a in mapping.assets],
                             "logic": mapping.logic_summary,
                             "trace": mapping.resolution_trace,
                             "files": [k for k in code_context if k != "__metadata__"]
@@ -218,19 +231,37 @@ if st.session_state['analysis_results']:
     
     if selected_task_key:
         task_data = st.session_state['analysis_results'].get(selected_task_key, {})
-        with st.container(border=True):
-             col1, col2 = st.columns(2)
-             with col1:
-                 st.write("**Files Analyzed:**")
-                 st.json(task_data.get("files", []))
-             with col2:
-                 st.write("**Resolution Trace:**")
-                 trace = task_data.get("trace", [])
-                 if trace:
-                     for step in trace:
-                         st.text(step)
-                 else:
-                     st.info("No trace available.")
+        
+        # New Tab Layout
+        tab1, tab2, tab3 = st.tabs(["📝 Assets (Confidence)", "📂 Files", "📜 Trace"])
+        
+        with tab1:
+            st.caption("Identified Data Assets with Confidence Scores")
+            assets = task_data.get("assets", [])
+            if assets:
+                st.dataframe(
+                    assets, 
+                    column_config={
+                        "confidence": st.column_config.TextColumn("Confidence", help="High=Config/Literal, Medium=Resolved, Low=Guessed"),
+                        "identifier": "Asset",
+                        "usage": "Usage",
+                        "evidence": "Resolution Method"
+                    },
+                    use_container_width=True
+                )
+            else:
+                st.info("No assets found.")
+        
+        with tab2:
+             st.json(task_data.get("files", []))
+             
+        with tab3:
+             trace = task_data.get("trace", [])
+             if trace:
+                 for step in trace:
+                     st.text(step)
+             else:
+                 st.info("No trace available.")
     
     if st.button("💾 Save Manifest"):
         # Convert back to JSON format
