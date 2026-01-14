@@ -3,7 +3,7 @@ import pandas as pd
 import json
 import logging
 from backend.databricks_client import DatabricksService
-from backend.git_manager import GitManager
+from backend.config import get_config, setup_logging
 from ai_agents.mapping_agent import MappingAgent
 
 # Setup Page Config (MUST BE FIRST)
@@ -13,6 +13,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize Logging
+config = get_config()
+setup_logging(config.log_level)
+logger = logging.getLogger(__name__)
 
 # --- Custom CSS for "Beautiful" Design ---
 st.markdown("""
@@ -62,7 +67,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### ℹ️ Help")
-    st.markdown("1. Enter **Job ID** & **Git Repo**.\n2. **Select Tasks** to analyze.\n3. **Run AI Analysis** to map lineage.\n4. **Validate** & **Save** manifest.")
+    st.markdown("1. Enter **Job ID**.\n2. **Select Tasks** to analyze.\n3. **Run AI Analysis** to map lineage.\n4. **Validate** & **Save** manifest.")
 
 # --- Main Content ---
 st.title("🔍 Agentic RCA Validator")
@@ -71,38 +76,28 @@ st.markdown("Generate and validate Unit Catalog lineage mappings for your Databr
 # Initialize Session State
 if 'job_tasks' not in st.session_state: st.session_state['job_tasks'] = []
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
-if 'repo_cloned' not in st.session_state: st.session_state['repo_cloned'] = False
 
 # --- Step 1: Input ---
-with st.expander("1️⃣ Job & Repository Configuration", expanded=True):
-    col1, col2 = st.columns(2)
-    with col1:
-        job_id_input = st.text_input("Databricks Job ID", help="The numeric ID of your Databricks Job")
-    with col2:
-        git_url_input = st.text_input("GitLab Repository URL", help="The HTTPS URL of your GitLab repo")
+with st.expander("1️⃣ Job Configuration", expanded=True):
+    job_id_input = st.text_input("Databricks Job ID", help="The numeric ID of your Databricks Job")
 
-    if st.button("Fetch Job & Clone Repo"):
-        if job_id_input and git_url_input:
-            with st.spinner("Fetching Job and Cloning Repo..."):
+    if st.button("Fetch Job"):
+        if job_id_input:
+            with st.spinner("Fetching Job Details..."):
                 try:
                     # 1. Fetch Job
                     db_service = DatabricksService()
                     tasks = db_service.get_job_tasks(int(job_id_input))
                     st.session_state['job_tasks'] = tasks
                     
-                    # 2. Clone Repo
-                    git_mgr = GitManager()
-                    git_mgr.clone_repo(git_url_input)
-                    st.session_state['repo_cloned'] = True
-                    
-                    st.success(f"✅ Found {len(tasks)} tasks and cloned repository!")
+                    st.success(f"✅ Found {len(tasks)} tasks!")
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
-            st.warning("Please enter both Job ID and Git URL.")
+            st.warning("Please enter Job ID.")
 
 # --- Step 2: Task Selection ---
-if st.session_state['job_tasks'] and st.session_state['repo_cloned']:
+if st.session_state['job_tasks']:
     st.markdown("### 2️⃣ Select Tasks to Analyze")
     
     # "Select All" Logic
@@ -118,7 +113,13 @@ if st.session_state['job_tasks'] and st.session_state['repo_cloned']:
     with st.container():
         for task in st.session_state['job_tasks']:
             is_checked = select_all
-            if st.checkbox(f"**{task['task_key']}** ({task['task_type']})", value=is_checked, key=f"wk_{task['task_key']}"):
+            label = f"**{task['task_key']}** ({task['task_type']})"
+            if task.get("package_name"):
+                label += f" 📦 {task['package_name']}"
+            if task.get("parameters"):
+                label += f" 🔧 {task['parameters']}"
+            
+            if st.checkbox(label, value=is_checked, key=f"wk_{task['task_key']}"):
                 selected_tasks.append(task)
     
     st.info(f"Selected {len(selected_tasks)} tasks for analysis.")
@@ -130,31 +131,29 @@ if st.session_state['job_tasks'] and st.session_state['repo_cloned']:
         else:
             with st.status("Running AI Analysis...", expanded=True) as status:
                 agent = MappingAgent()
-                git_mgr = GitManager() # Re-init to use cached paths
+                # db_service is already initialized in loop or we can re-init
+                db_service = DatabricksService()
                 
                 results = {}
                 progress_bar = st.progress(0)
                 
                 for i, task in enumerate(selected_tasks):
                     st.write(f"Analyzing `{task['task_key']}`...")
-                    script_path = task.get('script_path')
                     
-                    if script_path:
-                        # Read Code
-                        code = git_mgr.get_file_content(script_path)
-                        if code:
-                            # Analyze
-                            mapping = agent.analyze_code(code)
-                            results[task['task_key']] = {
-                                "sources": mapping.sources,
-                                "targets": mapping.targets,
-                                "logic": mapping.logic_summary
-                            }
-                        else:
-                            st.warning(f"Could not find file for {task['task_key']}")
-                            results[task['task_key']] = {"sources": [], "targets": [], "logic": "File not found"}
+                    # Use DatabricksService to get code
+                    code_context = db_service.get_task_code(task)
+                    
+                    if code_context and not code_context.startswith("# No code retrieval") and not code_context.startswith("# Error"):
+                        # Analyze
+                        mapping = agent.analyze_code(code_context)
+                        results[task['task_key']] = {
+                            "sources": mapping.sources,
+                            "targets": mapping.targets,
+                            "logic": mapping.logic_summary
+                        }
                     else:
-                        results[task['task_key']] = {"sources": [], "targets": [], "logic": "No script path"}
+                        st.warning(f"Could not retrieve code for {task['task_key']}: {code_context}")
+                        results[task['task_key']] = {"sources": [], "targets": [], "logic": f"Retrieval failed: {code_context}"}
                     
                     progress_bar.progress((i + 1) / len(selected_tasks))
                 
