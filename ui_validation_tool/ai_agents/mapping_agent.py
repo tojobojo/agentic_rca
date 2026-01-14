@@ -1,7 +1,6 @@
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from agents import Agent
-from .runner import Runner
+from agents import Agent, Runner
 from backend.config import get_config
 from backend.config_loader import ConfigLoader
 from backend.ast_parser import ASTParser
@@ -56,7 +55,8 @@ Rules:
 3. Identify the main script based on the Task Name (e.g. task='process_sales' -> keep 'sales_etl.py').
 4. Keep any other files that likely contain logic for this specific task.
 5. DISCARD unrelated scripts (e.g. 'marketing_etl.py' if task is 'sales').
-6. Return the list of relevant filenames as a simple JSON list of strings.
+6. Look for ENVIRONMENT hints in file paths (e.g. 'conf/prod/...' or 'deploy/production/...'). PRIORITIZE 'prod'/'production' paths if multiple environments are present.
+7. Return the list of relevant filenames as a simple JSON list of strings.
 """,
              output_type=List[str]
         )
@@ -99,7 +99,7 @@ Rules:
             resolution_trace.append(f"Pruning context from {len(all_files)} files...")
             try:
                 prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
-                relevant_files = await self.pruner.arun(prompt) # Expects List[str]
+                relevant_files = await Runner.run(self.pruner, prompt) # Expects List[str]
                 
                 # Safety net: Ensure we didn't lose everything or config files
                 # (The Agent instructions say always keep conf/, but let's double check code_context keys)

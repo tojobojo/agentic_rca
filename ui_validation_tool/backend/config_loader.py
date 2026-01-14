@@ -36,12 +36,21 @@ class ConfigLoader:
         envs_to_try = [environment] if environment else ["prod", "production"]
         
         for env in envs_to_try:
+             # 1. Try exact file "env.yaml"
              env_file = f"{env}.yaml"
              env_content = self._find_and_load(env_file)
              if env_content:
                  logger.info(f"Loading environment config: {env_file}")
                  self.config = self._merge(self.config, env_content)
-                 break # only load the first match
+                 break
+             
+             # 2. Try path matching (e.g. conf/prod/config.yaml or conf/production/settings.yml)
+             # We look for a file that contains /{env}/ in its path and ends with .yaml/.yml
+             env_content = self._find_and_load(env, try_path_match=True)
+             if env_content:
+                 logger.info(f"Loading environment config (from path): {env}")
+                 self.config = self._merge(self.config, env_content)
+                 break
         
         # 3. Job Parameters
         if job_params:
@@ -57,21 +66,38 @@ class ConfigLoader:
         """Resolve a key from the loaded config."""
         return self.flat_config.get(key)
 
-    def _find_and_load(self, filename_suffix: str) -> Dict[str, Any]:
-        """Finds a file ending with suffix in memory or disk and loads it."""
+    def _find_and_load(self, token: str, try_path_match: bool = False) -> Dict[str, Any]:
+        """
+        Finds a file.
+        If try_path_match=False: finds file ending with 'token' (e.g. 'defaults.yaml').
+        If try_path_match=True: finds file containing '/token/' in path and ending with .yaml/.yml.
+        """
         # 1. Try InMemory
         for path, content in self.config_files.items():
-            if path.endswith(filename_suffix):
-                try:
-                    return yaml.safe_load(content) or {}
-                except Exception as e:
-                    logger.error(f"Failed to parse in-memory YAML {path}: {e}")
-                    return {}
+            if try_path_match:
+                # Path Match logic: must look like .../prod/... or .../production/...
+                # And must be a YAML file
+                normalized_path = path.replace("\\", "/")
+                if f"/{token}/" in normalized_path and (path.endswith(".yaml") or path.endswith(".yml")):
+                     try:
+                        return yaml.safe_load(content) or {}
+                     except Exception as e:
+                        logger.error(f"Failed to parse in-memory YAML {path}: {e}")
+                        return {}
+            else:
+                # Suffix match logic
+                if path.endswith(token):
+                    try:
+                        return yaml.safe_load(content) or {}
+                    except Exception as e:
+                        logger.error(f"Failed to parse in-memory YAML {path}: {e}")
+                        return {}
         
-        # 2. Try Disk
-        disk_path = os.path.join(self.config_dir, filename_suffix)
-        if os.path.exists(disk_path):
-             return self._load_from_disk(disk_path)
+        # 2. Try Disk (Only supported for direct suffix match for now, path match on disk is complex/ambiguous without walk)
+        if not try_path_match:
+            disk_path = os.path.join(self.config_dir, token)
+            if os.path.exists(disk_path):
+                 return self._load_from_disk(disk_path)
         
         return {}
 
