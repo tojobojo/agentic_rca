@@ -12,33 +12,35 @@ class TableMapping(BaseModel):
     sources: List[str] = Field(description="List of source tables or paths read from")
     targets: List[str] = Field(description="List of target tables or paths written to")
     logic_summary: str = Field(description="One sentence summary of the transformation logic")
+    resolution_trace: List[str] = Field(default=[], description="Step-by-step log of how variables were resolved to table names")
 
 MAPPING_INSTRUCTIONS = """
 You are an expert Data Engineer specializing in PySpark/Databricks code analysis.
 Your goal is to extract the **exact full table names** used as Sources (Read) and Targets (Write).
 
-### CRITICAL: VARIABLE RESOLUTION
-You will often see variables used in table operations, e.g., `spark.table(input_table)`.
-**You MUST strictly separate VARIABLES from LITERALS.**
+### CRITICAL: TRACE LIKE A HUMAN
+Do not guess. You must traverse the code logically to resolve variables.
+Populate the `resolution_trace` with your step-by-step findings.
 
-**Algorithm for Resolution:**
-1.  **Identify**: Found `spark.read.table(x)`. Is `x` a string literal?
-    - YES: Output it.
-    - NO: It is a variable. **TRACE BACKWARD**.
-2.  **Trace Backward**:
-    - Look for assignments: `x = "catalog.schema.table"`?
-    - Look for f-strings: `x = f"{env}.sales"` -> Search for `env`.
-    - Look for function args: `def run(x):` -> Search for callers `run("literal_value")`.
-    - Look for Job Parameters: Search the `Metadata` section.
-3.  **Result**:
-    - If resolved: Output the **resolved literal** value (e.g., `prod.sales_data`).
-    - If partially resolved: Output the best inference (e.g., `{env}.sales_data`).
-    - If unresolved: Output `VAR(x)` to indicate it's a variable.
+**Traversal Algorithm:**
+1.  **Start at the IO Operation**: Find `spark.read.table(x)`.
+2.  **Check for Literal**: Is `x` "catalog.schema.table"? -> Done.
+3.  **Trace Variable**:
+    - "Found variable `x`."
+    - "Searching for assignment of `x` in current file..."
+    - "Searching for function definition `def run(x)`... found caller `run('my_table')` in `main.py`."
+    - "Checking Metadata for parameters..."
+4.  **Conclude**: "Resolved `x` to `my_table`."
 
 ### Rules
-- **Sources**: `spark.table()`, `spark.read`, `FROM table`, `join(table)`.
-- **Targets**: `.saveAsTable()`, `.insertInto()`, `MERGE INTO target`, `COPY INTO`.
-- **Context**: You are provided with multiple files. Use the file hierarchy to trace imports and calls.
+- **Sources**: `spark.table()`, `spark.read.table()`, `spark.sql()`.
+- **Path Sources**: Look for `spark.read.load("path")`, `.parquet("path")`, `.csv("path")`.
+- **Targets**: `.saveAsTable()`, `.insertInto()`, `MERGE INTO`, `COPY INTO`.
+- **Path Targets**: Look for `.write.save("path")`, `.parquet("path")`.
+- **Valid Formats**:
+    - **Catalog**: `catalog.schema.table`
+    - **Paths**: `abfss://...` (ADLS), `dbfs:/...` (DBFS), `/mnt/...` (Mounts), `/Volumes/...` (Unity Catalog).
+- **Resolution Trace**: You MUST provide a log of your "mental walk" through the code for EVERY table/path found.
 """
 
 class MappingAgent:
@@ -65,7 +67,10 @@ class MappingAgent:
             prompt_parts.append(f"Metadata:\n{code_context.pop('__metadata__')}\n")
             
         total_chars = 0
-        MAX_CHARS = 120000 # Increase limit for multi-file contexts
+        MAX_CHARS = 120000 
+        
+        file_names = list(code_context.keys())
+        logger.info(f"Analyzing files: {file_names}")
         
         for filename, content in code_context.items():
             if total_chars > MAX_CHARS:

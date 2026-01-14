@@ -33,7 +33,7 @@ class UIConfig(BaseModel):
     # Model Settings
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))
     max_tokens: int = int(os.getenv("MAX_TOKENS", "20000"))
-    timeout: int = int(os.getenv("LLM_TIMEOUT", "30"))
+    timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))
 
     model_settings: ModelSettings = ModelSettings(
         temperature=temperature,
