@@ -27,63 +27,116 @@ class HybridResult(BaseModel):
     assets: List[DataAsset] = Field(description="List of all identified sources and targets")
     logic_summary: str = Field(description="Summary of the transformation logic")
     resolution_trace: List[str] = Field(description="Step-by-step resolution log")
+    ignored_files: List[str] = Field(default=[], description="List of files ignored by Context Pruner")
 
 class MappingAgent:
     def __init__(self):
         self.config = get_config()
         # We reuse the agent for "Logic Summary" or as a fallback for complex extraction
         self.agent = Agent(
-             name="HybridAgent",
+            name="HybridAgent",
+            model=self.config.model,
+            model_settings=self.config.model_settings,
+            instructions="You are a Data Logic Summarizer. Given code and resolved tables, summarize the logic.",
+            output_type=HybridResult 
+        )
+        
+        # New: Context Pruner Agent
+        self.pruner = Agent(
+             name="ContextPruner",
              model=self.config.model,
              model_settings=self.config.model_settings,
-             instructions="You are a Data Logic Summarizer. Given code and resolved tables, summarize the logic.",
-             output_type=HybridResult # Reusing structure, though we heavily rely on deterministic tools
+             instructions="""
+You are an Intelligent Code Context Pruner.
+Your Goal: Given a Task Name, Job Parameters, and a list of File Names, identify ONLY the relevant files for analysis.
+
+Rules:
+1. ALWAYS keep 'conf/' or 'config/' files.
+2. ALWAYS keep 'utils/', 'common/', or 'shared/' files.
+3. Identify the main script based on the Task Name (e.g. task='process_sales' -> keep 'sales_etl.py').
+4. Keep any other files that likely contain logic for this specific task.
+5. DISCARD unrelated scripts (e.g. 'marketing_etl.py' if task is 'sales').
+6. Return the list of relevant filenames as a simple JSON list of strings.
+""",
+             output_type=List[str]
         )
 
     async def analyze_code_async(self, code_context: dict) -> HybridResult:
         """
         Executes the 3-Layer Resolution Pipeline:
-        1. Config Check (Ground Truth)
-        2. AST Extraction (Deterministic)
-        3. Symbol Resolution (Safe Eval)
+        1. Context Pruning (LLM)
+        2. Config Check (Ground Truth)
+        3. AST Extraction (Deterministic)
+        4. Symbol Resolution (Safe Eval)
         + LLM (Logic Summary)
         """
         if not code_context:
              return HybridResult(assets=[], logic_summary="Empty context", resolution_trace=[])
 
-        # --- Layer 1: Config Loading ---
-        # Parse 'Metadata' from context to get Job Params
+        # --- Layer 0: Context Pruning ---
+        # Identify task key from metadata if possible, or just pass all context keys
+        task_info = ""
         job_params = {}
         if "__metadata__" in code_context:
-             meta = code_context.pop("__metadata__")
-             # Heuristic to parse job params if available in metadata string
-             # Metadata format: "Package: ... Parameters: {'env': 'prod', ...}"
-             m = re.search(r"Parameters: (\{.*?\})", meta)
+             task_info = code_context["__metadata__"]
+             # Extract params for config loader
+             m = re.search(r"Parameters: (\{.*?\})", task_info)
              if m:
-                 try: 
-                    # simplistic fix for python dict string to json
+                 try:
                     import ast
                     job_params = ast.literal_eval(m.group(1))
-                 except Exception as e: 
-                    logger.warning(f"Failed to parse job params: {e}")
+                 except: pass
 
+        all_files = [f for f in code_context.keys() if f != "__metadata__"]
+        
+        # LLM Pruning
+        resolution_trace = []
+        ignored_files = []
+        relevant_files = all_files
+
+        # Only prune if we have enough files to warrant it (e.g. > 3)
+        if len(all_files) > 3:
+            resolution_trace.append(f"Pruning context from {len(all_files)} files...")
+            try:
+                prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
+                relevant_files = await self.pruner.arun(prompt) # Expects List[str]
+                
+                # Safety net: Ensure we didn't lose everything or config files
+                # (The Agent instructions say always keep conf/, but let's double check code_context keys)
+                # Actually, let's just trust the LLM but fallback if empty
+                if not relevant_files:
+                    relevant_files = all_files
+                    resolution_trace.append("  Pruner returned empty, keeping all.")
+                else:
+                    # diff
+                    ignored_files = list(set(all_files) - set(relevant_files))
+                    resolution_trace.append(f"  Kept {len(relevant_files)} files, ignored {len(ignored_files)}.")
+            except Exception as e:
+                logger.error(f"Pruning failed: {e}")
+                resolution_trace.append(f"  Pruning failed ({e}), keeping all.")
+                relevant_files = all_files
+
+        # --- Layer 1: Config Loading ---
         config_loader = ConfigLoader()
-        # In a real app config_dir would be configurable. Defaulting to 'conf' relative to CWD.
-        # Pass code_context as config_files so it can find 'defaults.yaml' etc.
+        # Pass code_context (FULL context or PRUNED? Config loader needs configs even if pruned? 
+        # Pruner rule 1 says always keep config. So relevant_files should have them.)
+        
+        # We need a dict for ConfigLoader. 
+        # But wait, if Pruner dropped 'defaults.yaml', we are in trouble.
+        # Let's forcefully keep defaults.yaml / conf/ in the dict passed to ConfigLoader?
+        # Better: Pass full code_context to ConfigLoader, but only analyze relevant_files in loop.
+        
         config = config_loader.load_configs(job_params=job_params, config_files=code_context)
         
         # --- Layer 2 & 3: AST & Resolve ---
         resolver = SymbolResolver(config)
-        resolved_trace = []
         found_assets = []
         
-        # Sort files to process utils/config files first? 
-        # For now, just process all.
-        
-        for filename, content in code_context.items():
-            if filename == "__metadata__": continue
+        for filename in relevant_files:
+            if filename not in code_context: continue # Should not happen
+            content = code_context[filename]
             
-            resolved_trace.append(f"Analyzing {filename}...")
+            resolution_trace.append(f"Analyzing {filename}...")
             
             # --- Handler: Python ---
             if filename.endswith(".py"):
@@ -97,7 +150,7 @@ class MappingAgent:
                     val, conf = resolver.resolve(val_node, local_vars)
                     if val:
                         local_vars[var] = val
-                        resolved_trace.append(f"  Defined {var} = {val} ({conf})")
+                        resolution_trace.append(f"  Defined {var} = {val} ({conf})")
 
                 # Resolve I/O Calls from AST
                 for io in parser.io_calls:
@@ -111,34 +164,29 @@ class MappingAgent:
                     elif conf == 'MEDIUM': evidence += " + Variable Tracing"
                     
                     if val:
-                        self._add_asset(found_assets, resolved_trace, val, op, conf, evidence)
+                        self._add_asset(found_assets, resolution_trace, val, op, conf, evidence)
                     else:
-                        resolved_trace.append(f"  Unresolved {op} at line {io['line']}")
+                        resolution_trace.append(f"  Unresolved {op} at line {io['line']}")
 
             # --- Handler: SQL ---
             elif filename.endswith(".sql"):
                 # Simple Regex for now
-                # Sources: FROM x, JOIN y
-                # Targets: INSERT INTO z, MERGE INTO w
-                
-                # Sources
                 sources = re.findall(r"(?:FROM|JOIN)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
                 for s in sources:
-                    self._add_asset(found_assets, resolved_trace, s, "READ", "HIGH", "SQL Regex Extraction")
+                    self._add_asset(found_assets, resolution_trace, s, "READ", "HIGH", "SQL Regex Extraction")
                     
-                # Targets
                 targets = re.findall(r"(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
                 for t in targets:
-                    self._add_asset(found_assets, resolved_trace, t, "WRITE", "HIGH", "SQL Regex Extraction")
+                    self._add_asset(found_assets, resolution_trace, t, "WRITE", "HIGH", "SQL Regex Extraction")
 
         # --- Layer 4: LLM Logic Summary (Optional) ---
-        # For efficiency, we just return the deterministic results + simple summary
         logic_summary = f"Identified {len(found_assets)} assets using Config-Driven Resolution."
         
         return HybridResult(
             assets=found_assets,
             logic_summary=logic_summary,
-            resolution_trace=resolved_trace
+            resolution_trace=resolution_trace,
+            ignored_files=ignored_files
         )
 
     def _add_asset(self, assets_list, trace, val, op, conf, evidence):

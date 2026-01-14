@@ -19,8 +19,8 @@ class ConfigLoader:
     def load_configs(self, environment: str = None, job_params: Dict[str, Any] = None, config_files: Dict[str, str] = None) -> Dict[str, Any]:
         """
         Loads keys in this order (last wins):
-        1. defaults.yaml (if exists in config_files or disk)
-        2. {environment}.yaml (if exists in config_files or disk)
+        1. defaults.yaml
+        2. {environment}.yaml (defaults to ['prod', 'production'] if None)
         3. job_params (JSON)
         """
         self.config_files = config_files or {}
@@ -32,12 +32,16 @@ class ConfigLoader:
             self.config = self._merge(self.config, defaults_content)
 
         # 2. Environment Overlay
-        if environment:
-            env_file = f"{environment}.yaml"
-            env_content = self._find_and_load(env_file)
-            if env_content:
-                logger.info(f"Loading environment config: {env_file}")
-                self.config = self._merge(self.config, env_content)
+        # If no environment provider, default to Production
+        envs_to_try = [environment] if environment else ["prod", "production"]
+        
+        for env in envs_to_try:
+             env_file = f"{env}.yaml"
+             env_content = self._find_and_load(env_file)
+             if env_content:
+                 logger.info(f"Loading environment config: {env_file}")
+                 self.config = self._merge(self.config, env_content)
+                 break # only load the first match
         
         # 3. Job Parameters
         if job_params:

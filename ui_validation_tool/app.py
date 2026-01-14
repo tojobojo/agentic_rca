@@ -190,7 +190,8 @@ if st.session_state['job_tasks']:
                             "assets": [a.model_dump() for a in mapping.assets],
                             "logic": mapping.logic_summary,
                             "trace": mapping.resolution_trace,
-                            "files": [k for k in code_context if k != "__metadata__"]
+                            "files": [k for k in code_context if k != "__metadata__" and k not in mapping.ignored_files],
+                            "ignored_files": mapping.ignored_files
                         }
                     else:
                         error_msg = code_context.get("error.txt", "Unknown Error") if isinstance(code_context, dict) else str(code_context)
@@ -261,7 +262,13 @@ if st.session_state['analysis_results']:
                 st.info("No assets found.")
         
         with tab2:
+             st.caption("✅ **Analyzed Files**")
              st.json(task_data.get("files", []))
+             
+             ignored = task_data.get("ignored_files", [])
+             if ignored:
+                 st.caption("⛔ **Ignored Files (Context Pruner)**")
+                 st.json(ignored)
              
         with tab3:
              trace = task_data.get("trace", [])
