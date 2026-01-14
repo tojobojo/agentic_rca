@@ -69,7 +69,8 @@ class MappingAgent:
 
         config_loader = ConfigLoader()
         # In a real app config_dir would be configurable. Defaulting to 'conf' relative to CWD.
-        config = config_loader.load_configs(job_params=job_params)
+        # Pass code_context as config_files so it can find 'defaults.yaml' etc.
+        config = config_loader.load_configs(job_params=job_params, config_files=code_context)
         
         # --- Layer 2 & 3: AST & Resolve ---
         resolver = SymbolResolver(config)
@@ -84,52 +85,54 @@ class MappingAgent:
             
             resolved_trace.append(f"Analyzing {filename}...")
             
-            # AST Parse
-            parser = ASTParser()
-            parser.parse(content)
-            
-            # Resolve Assignments to build local context
-            local_vars = {}
-            for var, val_node in parser.assignments.items():
-                val, conf = resolver.resolve(val_node, local_vars)
-                if val:
-                    local_vars[var] = val
-                    resolved_trace.append(f"  Defined {var} = {val} ({conf})")
+            # --- Handler: Python ---
+            if filename.endswith(".py"):
+                # AST Parse
+                parser = ASTParser()
+                parser.parse(content)
+                
+                # Resolve Assignments to build local context
+                local_vars = {}
+                for var, val_node in parser.assignments.items():
+                    val, conf = resolver.resolve(val_node, local_vars)
+                    if val:
+                        local_vars[var] = val
+                        resolved_trace.append(f"  Defined {var} = {val} ({conf})")
 
-            # Resolve I/O Calls
-            for io in parser.io_calls:
-                op = io['operation'] # READ / WRITE
-                arg_node = io['arg_node']
-                
-                val, conf = resolver.resolve(arg_node, local_vars)
-                
-                evidence = f"AST extraction line {io['line']}"
-                if conf == 'HIGH': evidence += " + Config/Literal Resolution"
-                elif conf == 'MEDIUM': evidence += " + Variable Tracing"
-                
-                if val:
-                    # Heuristic for Asset Type
-                    asset_type = "FILE" if ("/" in val or "abfss:" in val or "dbfs:" in val) else "TABLE"
-                    usage_type = "SOURCE" if op == "READ" else "TARGET"
+                # Resolve I/O Calls from AST
+                for io in parser.io_calls:
+                    op = io['operation'] # READ / WRITE
+                    arg_node = io['arg_node']
                     
-                    # Deduplicate based on identifier
-                    if not any(a.identifier == val for a in found_assets):
-                        asset = DataAsset(
-                            asset_type=asset_type,
-                            usage=usage_type,
-                            identifier=val,
-                            confidence=conf,
-                            evidence=evidence
-                        )
-                        found_assets.append(asset)
-                        resolved_trace.append(f"  Found {op} {asset_type}: {val} (Constraint: {conf})")
-                else:
-                    resolved_trace.append(f"  Unresolved {op} at line {io['line']}")
+                    val, conf = resolver.resolve(arg_node, local_vars)
+                    
+                    evidence = f"AST extraction line {io['line']}"
+                    if conf == 'HIGH': evidence += " + Config/Literal Resolution"
+                    elif conf == 'MEDIUM': evidence += " + Variable Tracing"
+                    
+                    if val:
+                        self._add_asset(found_assets, resolved_trace, val, op, conf, evidence)
+                    else:
+                        resolved_trace.append(f"  Unresolved {op} at line {io['line']}")
+
+            # --- Handler: SQL ---
+            elif filename.endswith(".sql"):
+                # Simple Regex for now
+                # Sources: FROM x, JOIN y
+                # Targets: INSERT INTO z, MERGE INTO w
+                
+                # Sources
+                sources = re.findall(r"(?:FROM|JOIN)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
+                for s in sources:
+                    self._add_asset(found_assets, resolved_trace, s, "READ", "HIGH", "SQL Regex Extraction")
+                    
+                # Targets
+                targets = re.findall(r"(?:INSERT\s+INTO|MERGE\s+INTO|UPDATE)\s+([a-zA-Z0-9_.]+)", content, re.IGNORECASE)
+                for t in targets:
+                    self._add_asset(found_assets, resolved_trace, t, "WRITE", "HIGH", "SQL Regex Extraction")
 
         # --- Layer 4: LLM Logic Summary (Optional) ---
         # For efficiency, we just return the deterministic results + simple summary
-        # If we need deeper analysis (e.g. JOIN logic), we can call LLM here.
-        
         logic_summary = f"Identified {len(found_assets)} assets using Config-Driven Resolution."
         
         return HybridResult(
@@ -137,6 +140,24 @@ class MappingAgent:
             logic_summary=logic_summary,
             resolution_trace=resolved_trace
         )
+
+    def _add_asset(self, assets_list, trace, val, op, conf, evidence):
+        """Helper to add unique assets."""
+        # Heuristic for Asset Type
+        asset_type = "FILE" if ("/" in val or "abfss:" in val or "dbfs:" in val) else "TABLE"
+        usage_type = "SOURCE" if op == "READ" else "TARGET"
+        
+        # Deduplicate based on identifier
+        if not any(a.identifier == val for a in assets_list):
+            asset = DataAsset(
+                asset_type=asset_type,
+                usage=usage_type,
+                identifier=val,
+                confidence=conf,
+                evidence=evidence
+            )
+            assets_list.append(asset)
+            trace.append(f"  Found {op} {asset_type}: {val} (Constraint: {conf})")
 
     def analyze_code(self, code_context: dict) -> HybridResult:
         """Sync wrapper."""

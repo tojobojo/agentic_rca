@@ -148,7 +148,14 @@ if st.session_state['job_tasks']:
                     
                     if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
                         # Success - we have a dictionary of files
-                        file_count = len([k for k in code_context if k != "__metadata__"])
+                        all_files = [k for k in code_context if k != "__metadata__"]
+                        file_count = len(all_files)
+                        
+                        # --- ENHANCEMENT: Show Files Found ---
+                        with st.expander(f"📂 Found {file_count} Files (Click to View)", expanded=False):
+                            st.write(all_files)
+                        # -------------------------------------
+
                         st.caption(f"Found {file_count} file(s).")
                         
                         # Add Job Params to Metadata for ConfigLoader

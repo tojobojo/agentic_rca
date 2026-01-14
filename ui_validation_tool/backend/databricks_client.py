@@ -251,7 +251,9 @@ class DatabricksService:
         
         for root, dirs, files in os.walk(extract_dir):
              for file in files:
-                 if file.endswith(".py"):
+                 # Allowed extensions for analysis
+                 allowed_exts = {".py", ".sql", ".scala", ".java", ".yaml", ".yml", ".json", ".properties", ".conf", ".ini", ".txt"}
+                 if any(file.endswith(ext) for ext in allowed_exts):
                      full_path = os.path.join(root, file)
                      rel_path = os.path.relpath(full_path, extract_dir)
                      if "site-packages" in rel_path or "egg-info" in rel_path: continue
