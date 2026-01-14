@@ -38,12 +38,31 @@ class MappingAgent:
             output_type=TableMapping
         )
 
-    async def analyze_code_async(self, code_content: str) -> TableMapping:
-        """Analyze code to find tables."""
-        if not code_content or len(code_content.strip()) < 10:
-             return TableMapping(sources=[], targets=[], logic_summary="Empty or too short code")
+    async def analyze_code_async(self, code_context: dict) -> TableMapping:
+        """Analyze code context to find tables."""
+        if not code_context:
+             return TableMapping(sources=[], targets=[], logic_summary="Empty code context")
 
-        prompt = f"Analyze this code and extract sources/targets:\n\n```python\n{code_content[:10000]}\n```" # Truncate if too huge
+        # Construct prompt from dictionary
+        prompt_parts = ["Analyze this code context and extract sources/targets:\n"]
+        
+        # Add metadata if present
+        if "__metadata__" in code_context:
+            prompt_parts.append(f"Metadata:\n{code_context.pop('__metadata__')}\n")
+            
+        total_chars = 0
+        MAX_CHARS = 120000 # Increase limit for multi-file contexts
+        
+        for filename, content in code_context.items():
+            if total_chars > MAX_CHARS:
+                prompt_parts.append(f"\n... (Truncated remaining files due to size) ...")
+                break
+                
+            file_block = f"\nFile: {filename}\n```python\n{content}\n```\n"
+            prompt_parts.append(file_block)
+            total_chars += len(file_block)
+
+        prompt = "".join(prompt_parts)
         
         try:
             result = await Runner.run(self.agent, prompt)
@@ -52,6 +71,6 @@ class MappingAgent:
             logger.error(f"Agent analysis failed: {e}")
             return TableMapping(sources=[], targets=[], logic_summary=f"Analysis failed: {str(e)}")
 
-    def analyze_code(self, code_content: str) -> TableMapping:
+    def analyze_code(self, code_context: dict) -> TableMapping:
         """Sync wrapper."""
-        return asyncio.run(self.analyze_code_async(code_content))
+        return asyncio.run(self.analyze_code_async(code_context))

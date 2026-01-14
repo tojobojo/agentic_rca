@@ -15,11 +15,6 @@ class DatabricksService:
     def __init__(self):
         self.config = get_config()
         # We instantiate WorkspaceClient without arguments.
-        # This allows the SDK to automatically resolve credentials using its standard chain:
-        # 1. Environment Variables (loaded via dotenv in config.py)
-        # 2. Databricks Configuration Profiles
-        # 3. Native Authentication (when running on Databricks)
-        # Explicit (host, token) arguments can conflict with Native Auth (OAuth) on Databricks.
         self.client = WorkspaceClient()
 
     def get_job(self, job_id: int) -> Dict[str, Any]:
@@ -67,7 +62,6 @@ class DatabricksService:
                 parameters = whl_task.get("parameters", [])
                 
                 # Find the wheel file in libraries
-                # We assume the first whl library is the one containing the code
                 libraries = t.get("libraries", [])
                 for lib in libraries:
                     if "whl" in lib:
@@ -89,40 +83,49 @@ class DatabricksService:
             
         return simplified_tasks
 
-    def get_task_code(self, task: Dict[str, Any]) -> str:
+    def get_task_code(self, task: Dict[str, Any]) -> Dict[str, str]:
         """
         Retrieves the code for a given task from Databricks (Notebook, File, or Wheel).
+        Returns a dictionary: {filename: content}
         """
         task_type = task.get("task_type")
         script_path = task.get("script_path")
+        
+        # Metadata header as a string to be pre-pended or handled by agent 
+        # (Actually implementation plan said to extract it, but here we can include it in the dict)
+        metadata_content = f"Task: {task.get('task_key')}\nType: {task_type}\n"
+        if task.get("package_name"): metadata_content += f"Package: {task.get('package_name')}\n"
+        if task.get("parameters"): metadata_content += f"Parameters: {task.get('parameters')}\n"
+        
+        result = {"__metadata__": metadata_content}
 
         try:
             if task_type == "notebook" and script_path:
-                return self._get_notebook_content(script_path)
+                content = self._get_notebook_content(script_path)
+                result[script_path] = content
             
             elif task_type == "python" and script_path:
-                # Script path could be Workspace (/Workspace/...) or DBFS (/dbfs/...)
-                return self._get_file_content(script_path)
+                content = self._get_file_content(script_path)
+                result[script_path] = content
 
             elif task_type == "wheel":
-                return self._process_wheel_task(task)
+                wheel_files = self._process_wheel_task(task)
+                result.update(wheel_files)
             
-            return f"# No code retrieval supported for task type: {task_type}"
+            return result
 
         except Exception as e:
             logger.error(f"Failed to retrieve code for {task.get('task_key')}: {e}")
-            return f"# Error retrieving code: {str(e)}"
+            return {"error.txt": f"Error retrieving code: {str(e)}"}
 
     def _get_notebook_content(self, path: str) -> str:
         """Exports notebook source from Workspace."""
         try:
-            # SDK handles the export
             resp = self.client.workspace.export(path, format=ExportFormat.SOURCE)
             if resp.content:
                 return base64.b64decode(resp.content).decode('utf-8')
             return ""
         except Exception as e:
-             # Fallback or re-raise
              raise ValueError(f"Could not export notebook at {path}: {e}")
 
     def _download_file_stream(self, path: str):
@@ -138,20 +141,15 @@ class DatabricksService:
             )
 
         # 2. Volumes or Workspace Files
-        # Paths usually start with /Volumes or /Workspace
         if path.startswith("/Volumes") or path.startswith("/Workspace"):
             logger.info(f"Downloading from Files API: {path}")
             return self.client.files.download(path).contents
 
         # 3. DBFS
-        # Normalize DBFS path
         dbfs_path = path
         if path.startswith("/dbfs"):
              dbfs_path = f"dbfs:{path}"
         elif not path.startswith("dbfs:"):
-             # Fallback/Default to DBFS if no other prefix matched
-             # But be careful, if it's a relative path in logic?
-             # For now, assume dbfs: if not absolute /Volumes or /Workspace
              dbfs_path = f"dbfs:{path}"
              
         logger.info(f"Downloading from DBFS API: {dbfs_path}")
@@ -160,51 +158,37 @@ class DatabricksService:
     def _get_file_content(self, path: str) -> str:
         """Reads file from Workspace or DBFS or Volumes."""
         try:
-            # Use unified downloader
-            # Context manager is tricky because different returns might behave differently
-            # but usually they support read().
             stream = self._download_file_stream(path)
-            
-            # If it's a context manager (dbfs.open), we should use 'with', 
-            # but files.download().contents is likely just a stream.
-            # Let's try to read safely.
             try:
                 content = stream.read()
             finally:
-                if hasattr(stream, 'close'):
-                    stream.close()
-                    
+                if hasattr(stream, 'close'): stream.close()     
             return content.decode('utf-8')
         except Exception as e:
-            # Fallback for old Workspace file logic if it was a Notebook path treated as file?
-            # Or if _download_file_stream failed.
             logger.warning(f"File download failed for {path}: {e}. Retrying as Notebook Export.")
             return self._get_notebook_content(path)
 
-    def _process_wheel_task(self, task: Dict[str, Any]) -> str:
-        """Downloads wheel, caches it, and extracts source code."""
+    def _process_wheel_task(self, task: Dict[str, Any]) -> Dict[str, str]:
+        """Downloads wheel, caches it, and extracts source code. Returns Dict[filename, content]"""
         package_name = task.get("package_name", "unknown")
-        whl_path = task.get("script_path") 
+        whl_path = task.get("script_path")
+        logger.info(f"Processing wheel task: {task}, {whl_path}")
         
         if not whl_path:
-            return "# No wheel path found in task definition."
+             return {"error.txt": "# No wheel path found in task definition."}
             
         # Setup Cache
         cache_dir = os.path.join(self.config.temp_dir, "wheels")
         os.makedirs(cache_dir, exist_ok=True)
+        logger.info(f"Cache directory: {cache_dir}")
         
         whl_filename = os.path.basename(whl_path)
         local_whl_path = os.path.join(cache_dir, whl_filename)
         meta_path = os.path.join(cache_dir, f"{whl_filename}.json")
         extract_dir = os.path.join(cache_dir, f"{whl_filename}_extracted")
+        logger.info(f"Extract directory: {extract_dir}")
 
-        # 1. Get File Info (Modification Time)
-        # This is tricky across different APIs. 
-        # DBFS has get_status. Files API has get_metadata.
-        # For simplicity, we might skip strict cache invalidation for non-DBFS paths 
-        # OR implement _get_file_metadata. 
-        # Let's try to support it.
-        
+        # 1. Get File Info
         file_size = 0
         mod_time = 0
         
@@ -217,10 +201,9 @@ class DatabricksService:
             elif whl_path.startswith("/Volumes") or whl_path.startswith("/Workspace"):
                  status = self.client.files.get_metadata(whl_path)
                  file_size = status.content_length
-                 mod_time = status.last_modified # distinct format?
+                 mod_time = status.last_modified 
         except Exception as e:
              logger.warning(f"Could not get metadata for {whl_path}: {e}")
-             # Proceed without strict caching if metadata fails (force download?)
              pass
 
         # 2. Check Cache
@@ -229,13 +212,10 @@ class DatabricksService:
             try:
                 with open(meta_path, 'r') as f:
                     meta = json.load(f)
-                # Only check if we successfully got remote metadata
                 if mod_time > 0:
                      if meta.get('modification_time') == mod_time and meta.get('file_size') == file_size:
                         cached = True
                 else:
-                    # If we couldn't get remote meta, maybe trust cache? 
-                    # Or force refresh? Let's trust cache to avoid error loops if just metadata failed.
                     cached = True 
             except:
                 pass 
@@ -243,7 +223,6 @@ class DatabricksService:
         # 3. Download if not cached
         if not cached:
             logger.info(f"Downloading wheel {whl_filename}...")
-            # Cleanup
             if os.path.exists(extract_dir):
                 import shutil
                 shutil.rmtree(extract_dir)
@@ -251,56 +230,36 @@ class DatabricksService:
             try:
                 stream = self._download_file_stream(whl_path)
                 with open(local_whl_path, 'wb') as dst:
-                    # Shutil copyfileobj is efficient
                     import shutil
                     shutil.copyfileobj(stream, dst)
-                
-                # Cleanup stream
                 if hasattr(stream, 'close'): stream.close()
-                
             except Exception as e:
-                return f"# Error downloading wheel {whl_path}: {e}"
+                return {"error.txt": f"# Error downloading wheel {whl_path}: {e}"}
             
-            # Update Meta
             if mod_time > 0:
                 with open(meta_path, 'w') as f:
-                    json.dump({
-                        "modification_time": mod_time,
-                        "file_size": file_size
-                    }, f)
+                    json.dump({"modification_time": mod_time, "file_size": file_size}, f)
                 
-            # Extract
             try:
                 with zipfile.ZipFile(local_whl_path, 'r') as zip_ref:
                     zip_ref.extractall(extract_dir)
             except zipfile.BadZipFile:
-                 return f"# Error: Downloaded file {whl_filename} is not a valid zip/wheel."
+                 return {"error.txt": f"# Error: Downloaded file {whl_filename} is not a valid zip/wheel."}
 
         # 4. Read Source Files
-        source_code = []
+        files_dict = {}
         
-        # Add Metadata Header
-        source_code.append(f"# Task Metadata")
-        source_code.append(f"# Package: {package_name}")
-        source_code.append(f"# Wheel: {whl_path}")
-        source_code.append(f"# Parameters: {task.get('parameters', [])}")
-        source_code.append("-" * 40)
-
         for root, dirs, files in os.walk(extract_dir):
              for file in files:
                  if file.endswith(".py"):
                      full_path = os.path.join(root, file)
                      rel_path = os.path.relpath(full_path, extract_dir)
-                     
-                     # Skip common noise
-                     if "site-packages" in rel_path or "egg-info" in rel_path:
-                         continue
+                     if "site-packages" in rel_path or "egg-info" in rel_path: continue
 
-                     source_code.append(f"\n# File: {rel_path}")
                      try:
                         with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            source_code.append(f.read())
+                            files_dict[rel_path] = f.read()
                      except Exception as e:
-                        source_code.append(f"# Error reading file: {e}")
+                        files_dict[rel_path] = f"# Error reading file: {e}"
         
-        return "\n".join(source_code)
+        return files_dict

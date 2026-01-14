@@ -143,7 +143,11 @@ if st.session_state['job_tasks']:
                     # Use DatabricksService to get code
                     code_context = db_service.get_task_code(task)
                     
-                    if code_context and not code_context.startswith("# No code retrieval") and not code_context.startswith("# Error"):
+                    if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
+                        # Success - we have a dictionary of files
+                        file_count = len([k for k in code_context if k != "__metadata__"])
+                        st.caption(f"Found {file_count} file(s).")
+                        
                         # Analyze
                         mapping = agent.analyze_code(code_context)
                         results[task['task_key']] = {
@@ -152,8 +156,9 @@ if st.session_state['job_tasks']:
                             "logic": mapping.logic_summary
                         }
                     else:
-                        st.warning(f"Could not retrieve code for {task['task_key']}: {code_context}")
-                        results[task['task_key']] = {"sources": [], "targets": [], "logic": f"Retrieval failed: {code_context}"}
+                        error_msg = code_context.get("error.txt", "Unknown Error") if isinstance(code_context, dict) else str(code_context)
+                        st.warning(f"Could not retrieve code for {task['task_key']}: {error_msg}")
+                        results[task['task_key']] = {"sources": [], "targets": [], "logic": f"Retrieval failed: {error_msg}"}
                     
                     progress_bar.progress((i + 1) / len(selected_tasks))
                 
