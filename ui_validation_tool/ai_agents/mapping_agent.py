@@ -97,6 +97,7 @@ Rules:
         # Only prune if we have enough files to warrant it (e.g. > 3)
         if len(all_files) > 3:
             resolution_trace.append(f"Pruning context from {len(all_files)} files...")
+            try:
                 prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
                 result = await Runner.run(self.pruner, prompt)
                 
