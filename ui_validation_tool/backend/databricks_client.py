@@ -125,16 +125,60 @@ class DatabricksService:
              # Fallback or re-raise
              raise ValueError(f"Could not export notebook at {path}: {e}")
 
+    def _download_file_stream(self, path: str):
+        """
+        Returns a file-like object (stream) for the remote path.
+        Handles DBFS, Volumes, and Workspace files.
+        """
+        # 1. ADLS / WASBS Guard
+        if any(path.startswith(p) for p in ["abfss:", "wasbs:", "adls:"]):
+            raise ValueError(
+                f"Direct download from ADLS ({path}) is not supported.\n"
+                "Please use a Unity Catalog Volume path (/Volumes/...) or DBFS Mount (dbfs:/mnt/...) instead."
+            )
+
+        # 2. Volumes or Workspace Files
+        # Paths usually start with /Volumes or /Workspace
+        if path.startswith("/Volumes") or path.startswith("/Workspace"):
+            logger.info(f"Downloading from Files API: {path}")
+            return self.client.files.download(path).contents
+
+        # 3. DBFS
+        # Normalize DBFS path
+        dbfs_path = path
+        if path.startswith("/dbfs"):
+             dbfs_path = f"dbfs:{path}"
+        elif not path.startswith("dbfs:"):
+             # Fallback/Default to DBFS if no other prefix matched
+             # But be careful, if it's a relative path in logic?
+             # For now, assume dbfs: if not absolute /Volumes or /Workspace
+             dbfs_path = f"dbfs:{path}"
+             
+        logger.info(f"Downloading from DBFS API: {dbfs_path}")
+        return self.client.dbfs.open(dbfs_path, read=True)
+
     def _get_file_content(self, path: str) -> str:
-        """Reads file from Workspace or DBFS."""
-        # Check prefix
-        if path.startswith("dbfs:") or path.startswith("/dbfs"):
-            # Use DBFS API
-            dbfs_path = path if path.startswith("dbfs:") else f"dbfs:{path}"
-            with self.client.dbfs.open(dbfs_path) as f:
-                return f.read().decode('utf-8')
-        else:
-            # Assume Workspace file
+        """Reads file from Workspace or DBFS or Volumes."""
+        try:
+            # Use unified downloader
+            # Context manager is tricky because different returns might behave differently
+            # but usually they support read().
+            stream = self._download_file_stream(path)
+            
+            # If it's a context manager (dbfs.open), we should use 'with', 
+            # but files.download().contents is likely just a stream.
+            # Let's try to read safely.
+            try:
+                content = stream.read()
+            finally:
+                if hasattr(stream, 'close'):
+                    stream.close()
+                    
+            return content.decode('utf-8')
+        except Exception as e:
+            # Fallback for old Workspace file logic if it was a Notebook path treated as file?
+            # Or if _download_file_stream failed.
+            logger.warning(f"File download failed for {path}: {e}. Retrying as Notebook Export.")
             return self._get_notebook_content(path)
 
     def _process_wheel_task(self, task: Dict[str, Any]) -> str:
@@ -154,12 +198,30 @@ class DatabricksService:
         meta_path = os.path.join(cache_dir, f"{whl_filename}.json")
         extract_dir = os.path.join(cache_dir, f"{whl_filename}_extracted")
 
-        # 1. Get DBFS File Info
-        dbfs_path = whl_path if whl_path.startswith("dbfs:") else f"dbfs:{whl_path}"
+        # 1. Get File Info (Modification Time)
+        # This is tricky across different APIs. 
+        # DBFS has get_status. Files API has get_metadata.
+        # For simplicity, we might skip strict cache invalidation for non-DBFS paths 
+        # OR implement _get_file_metadata. 
+        # Let's try to support it.
+        
+        file_size = 0
+        mod_time = 0
+        
         try:
-            status = self.client.dbfs.get_status(dbfs_path)
+            if whl_path.startswith("dbfs:") or whl_path.startswith("/dbfs") or (not whl_path.startswith("/")):
+                 dbfs_p = whl_path if whl_path.startswith("dbfs:") else f"dbfs:{whl_path}"
+                 status = self.client.dbfs.get_status(dbfs_p)
+                 file_size = status.file_size
+                 mod_time = status.modification_time
+            elif whl_path.startswith("/Volumes") or whl_path.startswith("/Workspace"):
+                 status = self.client.files.get_metadata(whl_path)
+                 file_size = status.content_length
+                 mod_time = status.last_modified # distinct format?
         except Exception as e:
-             return f"# Not found or no access to wheel: {dbfs_path}"
+             logger.warning(f"Could not get metadata for {whl_path}: {e}")
+             # Proceed without strict caching if metadata fails (force download?)
+             pass
 
         # 2. Check Cache
         cached = False
@@ -167,10 +229,16 @@ class DatabricksService:
             try:
                 with open(meta_path, 'r') as f:
                     meta = json.load(f)
-                if meta.get('modification_time') == status.modification_time and meta.get('file_size') == status.file_size:
-                    cached = True
+                # Only check if we successfully got remote metadata
+                if mod_time > 0:
+                     if meta.get('modification_time') == mod_time and meta.get('file_size') == file_size:
+                        cached = True
+                else:
+                    # If we couldn't get remote meta, maybe trust cache? 
+                    # Or force refresh? Let's trust cache to avoid error loops if just metadata failed.
+                    cached = True 
             except:
-                pass # Corrupt meta, re-download
+                pass 
         
         # 3. Download if not cached
         if not cached:
@@ -180,19 +248,33 @@ class DatabricksService:
                 import shutil
                 shutil.rmtree(extract_dir)
             
-            with self.client.dbfs.open(dbfs_path) as src, open(local_whl_path, 'wb') as dst:
-                dst.write(src.read())
+            try:
+                stream = self._download_file_stream(whl_path)
+                with open(local_whl_path, 'wb') as dst:
+                    # Shutil copyfileobj is efficient
+                    import shutil
+                    shutil.copyfileobj(stream, dst)
+                
+                # Cleanup stream
+                if hasattr(stream, 'close'): stream.close()
+                
+            except Exception as e:
+                return f"# Error downloading wheel {whl_path}: {e}"
             
             # Update Meta
-            with open(meta_path, 'w') as f:
-                json.dump({
-                    "modification_time": status.modification_time,
-                    "file_size": status.file_size
-                }, f)
+            if mod_time > 0:
+                with open(meta_path, 'w') as f:
+                    json.dump({
+                        "modification_time": mod_time,
+                        "file_size": file_size
+                    }, f)
                 
             # Extract
-            with zipfile.ZipFile(local_whl_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
+            try:
+                with zipfile.ZipFile(local_whl_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+            except zipfile.BadZipFile:
+                 return f"# Error: Downloaded file {whl_filename} is not a valid zip/wheel."
 
         # 4. Read Source Files
         source_code = []
