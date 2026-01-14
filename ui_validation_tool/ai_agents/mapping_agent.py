@@ -14,17 +14,31 @@ class TableMapping(BaseModel):
     logic_summary: str = Field(description="One sentence summary of the transformation logic")
 
 MAPPING_INSTRUCTIONS = """
-You are an expert Data Engineer.
-Your task is to analyze the provided Python/SQL code (PySpark/Databricks) and identify:
-1. Source Tables (tables READ from)
-2. Target Tables (tables WRITTEN to)
+You are an expert Data Engineer specializing in PySpark/Databricks code analysis.
+Your goal is to extract the **exact full table names** used as Sources (Read) and Targets (Write).
 
-Rules:
-- Identify tables referenced in `spark.table('...')`, `spark.read.table('...')`, `spark.sql('FROM ...')`.
-- Identify write targets in `.write.saveAsTable('...')`, `.insertInto('...')`, `MERGE INTO ...`.
-- Context implies Databricks/Delta Lake.
-- If a table name is constructed dynamically (e.g. variables), try to infer the intent or return the variable name representation.
-- Be accurate.
+### CRITICAL: VARIABLE RESOLUTION
+You will often see variables used in table operations, e.g., `spark.table(input_table)`.
+**You MUST strictly separate VARIABLES from LITERALS.**
+
+**Algorithm for Resolution:**
+1.  **Identify**: Found `spark.read.table(x)`. Is `x` a string literal?
+    - YES: Output it.
+    - NO: It is a variable. **TRACE BACKWARD**.
+2.  **Trace Backward**:
+    - Look for assignments: `x = "catalog.schema.table"`?
+    - Look for f-strings: `x = f"{env}.sales"` -> Search for `env`.
+    - Look for function args: `def run(x):` -> Search for callers `run("literal_value")`.
+    - Look for Job Parameters: Search the `Metadata` section.
+3.  **Result**:
+    - If resolved: Output the **resolved literal** value (e.g., `prod.sales_data`).
+    - If partially resolved: Output the best inference (e.g., `{env}.sales_data`).
+    - If unresolved: Output `VAR(x)` to indicate it's a variable.
+
+### Rules
+- **Sources**: `spark.table()`, `spark.read`, `FROM table`, `join(table)`.
+- **Targets**: `.saveAsTable()`, `.insertInto()`, `MERGE INTO target`, `COPY INTO`.
+- **Context**: You are provided with multiple files. Use the file hierarchy to trace imports and calls.
 """
 
 class MappingAgent:
