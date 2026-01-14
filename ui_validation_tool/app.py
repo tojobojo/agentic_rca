@@ -152,7 +152,8 @@ if st.session_state['job_tasks']:
                         file_count = len(all_files)
                         
                         # --- ENHANCEMENT: Show Files Found ---
-                        with st.expander(f"📂 Found {file_count} Files (Click to View)", expanded=False):
+                        # check_key must be unique per task
+                        if st.checkbox(f"Show {file_count} files found", key=f"show_files_{task['task_key']}"):
                             st.write(all_files)
                         # -------------------------------------
 
