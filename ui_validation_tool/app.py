@@ -103,38 +103,38 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
 if st.session_state['job_tasks']:
     st.markdown("### 2️⃣ Select Tasks to Analyze")
     
-    # "Select All" Logic
-    all_keys = [t['task_key'] for t in st.session_state['job_tasks']]
+    # Filter valid tasks (ignore unknown types if needed, though usually unknown is a valid type label. User said 'Do not show unknown types')
+    # Let's assume 'task_type' shouldn't be empty or None.
+    valid_tasks = [t for t in st.session_state['job_tasks'] if t.get('task_type')]
     
     col_sel1, col_sel2 = st.columns([1, 4])
     with col_sel1:
-        select_all = st.checkbox("Select All Tasks", value=True)
+        select_all = st.checkbox("Select All", value=True)
     
     selected_tasks = []
     
-    # Display tasks in a grid or list
+    # Compact Grid Layout
     with st.container():
-        for task in st.session_state['job_tasks']:
+        # css for compact checkbox
+        st.markdown("""<style>.stCheckbox { margin-bottom: -10px; }</style>""", unsafe_allow_html=True)
+        
+        for task in valid_tasks:
             is_checked = select_all
-            label = f"**{task['task_key']}** ({task['task_type']})"
-            if task.get("package_name"):
-                label += f" 📦 {task['package_name']}"
-            if task.get("parameters"):
-                label += f" 🔧 {task['parameters']}"
+            # Compact Label: Name (Type)
+            label = f"**{task['task_key']}** <span style='color:grey'>({task['task_type']})</span>"
             
-            if st.checkbox(label, value=is_checked, key=f"wk_{task['task_key']}"):
+            if st.checkbox(label, value=is_checked, key=f"wk_{task['task_key']}", unsafe_allow_html=True):
                 selected_tasks.append(task)
     
-    st.info(f"Selected {len(selected_tasks)} tasks for analysis.")
+    st.caption(f"Selected {len(selected_tasks)} tasks.")
 
-    # --- Step 3: Analysis ---
+    # --- Step 3: Analysis & Validation (Combined) ---
     if st.button("🚀 Run AI Lineage Analysis"):
         if not selected_tasks:
             st.warning("No tasks selected.")
         else:
             with st.status("Running AI Analysis...", expanded=True) as status:
                 agent = MappingAgent()
-                # db_service is already initialized in loop or we can re-init
                 db_service = DatabricksService()
                 
                 results = {}
@@ -142,160 +142,128 @@ if st.session_state['job_tasks']:
                 
                 for i, task in enumerate(selected_tasks):
                     st.write(f"Analyzing `{task['task_key']}`...")
-                    
-                    # Use DatabricksService to get code
                     code_context = db_service.get_task_code(task)
                     
                     if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
-                        # Success - we have a dictionary of files
-                        all_files = [k for k in code_context if k != "__metadata__"]
-                        file_count = len(all_files)
-                        
-                        # --- ENHANCEMENT: Show Files Found ---
-                        # check_key must be unique per task
-                        if st.checkbox(f"Show {file_count} files found", key=f"show_files_{task['task_key']}"):
-                            st.write(all_files)
-                        # -------------------------------------
-
-                        st.caption(f"Found {file_count} file(s).")
-                        
-                        # Add Job Params to Metadata for ConfigLoader
+                        # Append params
                         if job_params_input:
                             current_meta = code_context.get("__metadata__", "")
                             code_context["__metadata__"] = f"{current_meta}\nParameters: {job_params_input}"
                         
-                        # Analyze (returns HybridResult)
+                        # Analyze
                         mapping = agent.analyze_code(code_context)
                         
-                        # Show Trace (Directly in status, no nested expander)
-                        st.markdown("---")
-                        st.caption("**Files Analyzed:**")
-                        st.json([k for k in code_context if k != "__metadata__"])
-                        
-                        st.caption("**Resolution Steps:**")
-                        if mapping.resolution_trace:
-                            for step in mapping.resolution_trace:
-                                st.text(step)
-                        else:
-                            st.info("No trace provided.")
-                        st.markdown("---")
-
-                        # Filter Assets
-                        sources = [a for a in mapping.assets if a.usage == "SOURCE"]
-                        targets = [a for a in mapping.assets if a.usage == "TARGET"]
-
+                        # Store raw results (assets object list)
                         results[task['task_key']] = {
-                            "sources": [a.identifier for a in sources],
-                            "targets": [a.identifier for a in targets],
                             "assets": [a.model_dump() for a in mapping.assets],
-                            "logic": mapping.logic_summary,
-                            "trace": mapping.resolution_trace,
-                            "files": [k for k in code_context if k != "__metadata__" and k not in mapping.ignored_files],
-                            "ignored_files": mapping.ignored_files
+                            "trace": mapping.resolution_trace
                         }
                     else:
-                        error_msg = code_context.get("error.txt", "Unknown Error") if isinstance(code_context, dict) else str(code_context)
-                        st.warning(f"Could not retrieve code for {task['task_key']}: {error_msg}")
-                        results[task['task_key']] = {"sources": [], "targets": [], "logic": f"Retrieval failed: {error_msg}"}
+                        st.warning(f"Failed to get code for {task['task_key']}")
+                        results[task['task_key']] = {"assets": [], "trace": []}
                     
                     progress_bar.progress((i + 1) / len(selected_tasks))
                 
                 st.session_state['analysis_results'] = results
                 status.update(label="Analysis Complete!", state="complete", expanded=False)
 
-# --- Step 4: Validation & Save ---
+# --- Step 4: Collapsible Results View ---
 if st.session_state['analysis_results']:
-    st.markdown("### 3️⃣ Validate & Save Manifest")
+    st.markdown("### 3️⃣ Review & Edit Lineage")
+    st.info("Expand each task to review and edit the discovered assets. You can Add/Delete rows directly.")
     
-    # Prepare Data for Editor
-    # We want a format: Task Key | Logic | Sources | Targets
-    # Sources/Targets should be comma-separated strings for editing, or list
+    final_manifest = {}
     
-    display_data = []
-    for t_key, data in st.session_state['analysis_results'].items():
-        display_data.append({
-            "Task Key": t_key,
-            "Logic Summary": data.get("logic", ""),
-            "Source Tables": ", ".join(data.get("sources", [])),
-            "Target Tables": ", ".join(data.get("targets", [])),
-        })
-    
-    df = pd.DataFrame(display_data)
-    
-    edited_df = st.data_editor(
-        df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor",
-        column_config={
-            "Task Key": st.column_config.TextColumn(disabled=True),
-            "Logic Summary": st.column_config.TextColumn(width="large"),
-            "Source Tables": st.column_config.TextColumn("Source Tables (comma-separated)", required=True),
-            "Target Tables": st.column_config.TextColumn("Target Tables (comma-separated)", required=True),
-        }
-    )
-
-    st.markdown("#### 🕵️ Detailed Analysis Review")
-    selected_task_key = st.selectbox("Select Task to View Details:", options=df["Task Key"].tolist())
-    
-    if selected_task_key:
-        task_data = st.session_state['analysis_results'].get(selected_task_key, {})
-        
-        # New Tab Layout
-        tab1, tab2, tab3 = st.tabs(["📝 Assets (Confidence)", "📂 Files", "📜 Trace"])
-        
-        with tab1:
-            st.caption("Identified Data Assets with Confidence Scores")
-            assets = task_data.get("assets", [])
-            if assets:
-                st.dataframe(
-                    assets, 
-                    column_config={
-                        "confidence": st.column_config.TextColumn("Confidence", help="High=Config/Explicit, Medium=Inferred, Low=Guessed"),
-                        "identifier": "Asset",
-                        "usage": "Usage",
-                        "evidence": "Resolution Method"
-                    },
-                    use_container_width=True
-                )
-            else:
-                st.info("No assets found.")
-        
-        with tab2:
-             st.caption("✅ **Analyzed Files**")
-             st.json(task_data.get("files", []))
-             
-             ignored = task_data.get("ignored_files", [])
-             if ignored:
-                 st.caption("⛔ **Ignored Files (Context Pruner)**")
-                 st.json(ignored)
-             
-        with tab3:
-             trace = task_data.get("trace", [])
-             if trace:
-                 for step in trace:
-                     st.text(step)
-             else:
-                 st.info("No trace available.")
-    
-    if st.button("💾 Save Manifest"):
-        # Convert back to JSON format
-        final_manifest = {}
-        for index, row in edited_df.iterrows():
-            task_key = row["Task Key"]
-            sources = [s.strip() for s in row["Source Tables"].split(",") if s.strip()]
-            targets = [t.strip() for t in row["Target Tables"].split(",") if t.strip()]
+    # Iterate over tasks
+    for task_key, data in st.session_state['analysis_results'].items():
+        # Collapsible View
+        with st.expander(f"📌 {task_key}", expanded=False):
+            
+            # Prepare Data for Editor
+            # We want columns: [Subtype (Dropdown)] [Identifier (Text)] [Usage (Hidden/Fixed? Or Dropdown?)]
+            # User design showed: [Catalog v] [Editable Text Field] [X]
+            # So 'Subtype' is the dropdown. 'Identifier' is the text.
+            
+            current_assets = data.get("assets", [])
+            df = pd.DataFrame(current_assets)
+            
+            if df.empty:
+                # Initialize empty structure if no assets found
+                df = pd.DataFrame(columns=["subtype", "identifier", "usage", "confidence", "asset_type"])
+            
+            # Simplified columns for the view
+            # If usage is mixed (Source/Target), we probably need to show it or split tables?
+            # View.png implies a single list. Let's show Usage too so user knows if it's Source or Target.
+            
+            # Editor Configuration
+            edited_df = st.data_editor(
+                df,
+                num_rows="dynamic", # Allow Add/Delete
+                use_container_width=True,
+                key=f"editor_{task_key}",
+                column_config={
+                    "subtype": st.column_config.SelectboxColumn(
+                        "Type",
+                        options=[
+                            "UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "JDBC_DB", 
+                            "ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", 
+                            "PARQUET_FILE", "CSV_FILE", "DELTA_PATH", "UNKNOWN"
+                        ],
+                        required=True,
+                        width="medium"
+                    ),
+                    "identifier": st.column_config.TextColumn(
+                        "Source/Target Name",
+                        required=True,
+                        width="large"
+                    ),
+                    "usage": st.column_config.SelectboxColumn(
+                        "Usage",
+                        options=["SOURCE", "TARGET"],
+                        required=True,
+                        width="small"
+                    ),
+                    # Hide internal columns
+                    "asset_type": None, 
+                    "confidence": None,
+                    "evidence": None
+                },
+                column_order=["usage", "subtype", "identifier"]
+            )
+            
+            # Update session state with edits (so they persist across reruns/expansions)
+            # data["assets"] = edited_df.to_dict("records") 
+            # Note: Streamlit data_editor updates session_state automatically if key is set, 
+            # but we need to capture the *output* of the editor function to get the current state for saving.
+            
+            # We'll construct the manifest chunk right here
+            sources = []
+            targets = []
+            
+            for _, row in edited_df.iterrows():
+                if row["usage"] == "SOURCE":
+                    sources.append(row["identifier"])
+                elif row["usage"] == "TARGET":
+                    targets.append(row["identifier"])
             
             final_manifest[task_key] = {
                 "sources": sources,
                 "targets": targets
             }
-        
-        # Save to file
+
+            # Optional: Show Trace
+            if st.checkbox("Show Trace", key=f"trace_{task_key}"):
+                st.text("\n".join(data.get("trace", [])))
+
+    # --- Save Button (Global) ---
+    st.markdown("---")
+    if st.button("💾 Save Manifest to JSON", type="primary"):
         output_path = "manifest.json"
         with open(output_path, "w") as f:
             json.dump(final_manifest, f, indent=2)
-            
-        st.success(f"Manifest saved to `{output_path}`! You can now use this with the RCA system.")
-        st.json(final_manifest, expanded=False)
+        
+        st.success(f"✅ Manifest saved to `{output_path}`")
+        with st.expander("View Generated JSON"):
+            st.json(final_manifest)
+
 

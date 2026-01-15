@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 class DataAsset(BaseModel):
     """Represents a resolved data asset (Table or File)."""
     asset_type: str = Field(description="TABLE or FILE")
+    subtype: str = Field(default="UNKNOWN", description="Detailed type: DELTA_TABLE, ADLS, S3, JDBC, PARQUET_FILE, etc.")
     usage: str = Field(description="SOURCE or TARGET")
     identifier: str = Field(description="Full table name or file path")
     confidence: str = Field(description="HIGH, MEDIUM, or LOW")
     evidence: str = Field(description="How this was resolved (e.g. 'Config key', 'Code usage')")
+
 
 class HybridResult(BaseModel):
     """Output of the Agentic Analysis."""
@@ -204,14 +206,54 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
                 if a.confidence == "HIGH" and existing.confidence != "HIGH":
                     unique_assets[a.identifier] = a
 
-        final_assets = list(unique_assets.values())
-        
+        final_assets = []
+        for a in unique_assets.values():
+            a.subtype = self._classify_asset(a.identifier, a.asset_type)
+            final_assets.append(a)
+            
         return HybridResult(
             assets=final_assets,
             logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
             resolution_trace=resolution_trace,
             ignored_files=ignored_files
         )
+
+    def _classify_asset(self, identifier: str, asset_type: str) -> str:
+        """Deterministically classifies the asset based on identifier patterns."""
+        ident_lower = identifier.lower()
+        
+        if asset_type == "FILE" or "/" in ident_lower:
+            # Cloud Storage
+            if ident_lower.startswith(("abfss:", "abfs:", "adl:", "wasb:")): return "ADLS"
+            if ident_lower.startswith(("s3:", "s3a:", "s3n:")): return "S3"
+            if ident_lower.startswith("gs:"): return "GCS"
+            if ident_lower.startswith("dbfs:"): return "DBFS"
+            if ident_lower.startswith("file:"): return "LOCAL_FILE"
+            
+            # Formats
+            if ident_lower.endswith(".parquet"): return "PARQUET_FILE"
+            if ident_lower.endswith(".csv"): return "CSV_FILE"
+            if ident_lower.endswith(".json"): return "JSON_FILE"
+            if ident_lower.endswith(".avro"): return "AVRO_FILE"
+            if ident_lower.endswith("delta_log"): return "DELTA_PATH"
+            
+            return "FILE_PATH"
+
+        elif asset_type == "TABLE":
+            # JDBC / DB
+            if ident_lower.startswith("jdbc:"):
+                if "postgres" in ident_lower: return "JDBC_POSTGRES"
+                if "mysql" in ident_lower: return "JDBC_MYSQL"
+                if "oracle" in ident_lower: return "JDBC_ORACLE"
+                if "sqlserver" in ident_lower: return "JDBC_SQLSERVER"
+                return "JDBC_DB"
+            
+            # Catalog Tables
+            parts = identifier.split(".")
+            if len(parts) == 3: return "UNITY_CATALOG_TABLE"
+            if len(parts) == 2: return "HIVE_METASTORE_TABLE"
+            
+        return "GENERIC_TABLE"
 
     def analyze_code(self, code_context: dict) -> HybridResult:
         """Sync wrapper."""
