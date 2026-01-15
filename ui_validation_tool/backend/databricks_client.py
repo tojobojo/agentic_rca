@@ -286,14 +286,19 @@ class DatabricksService:
                 # 1. Unity Catalog / Hive Tables
                 if subtype in ["UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "GENERIC_TABLE"] or "TABLE" in subtype:
                     try:
-                        self.client.tables.get(ident)
-                        results[ident] = "✅ Exists"
+                        table_info = self.client.tables.get(ident)
+                        # Extract details
+                        t_type = str(table_info.table_type).split('.')[-1] if table_info.table_type else "UNKNOWN"
+                        t_fmt = str(table_info.data_source_format).split('.')[-1] if table_info.data_source_format else "UNKNOWN"
+                        
+                        # Format status message: ✅ Exists (EXTERNAL, DELTA)
+                        results[ident] = f"✅ Exists ({t_type}, {t_fmt})"
                     except Exception as e:
                         if "NOT_FOUND" in str(e):
                             results[ident] = "❌ Not Found"
                         else:
                             # Could be permissions or other error
-                            results[ident] = f"⚠️ Check Failed: {str(e)[:50]}..."
+                            results[ident] = f"⚠️ Check Failed: {str(e)}"
 
                 # 2. Files / Paths
                 elif subtype in ["ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", "PARQUET_FILE", "CSV_FILE", "DELTA_PATH"] or "FILE" in subtype:

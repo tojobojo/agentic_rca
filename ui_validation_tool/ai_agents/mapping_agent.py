@@ -225,7 +225,10 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
     def _classify_asset(self, identifier: str, asset_type: str) -> str:
         """Deterministically classifies the asset based on identifier patterns."""
         ident_lower = identifier.lower()
-        
+        # Deterministic check for Delta Path syntax
+        if ident_lower.startswith("delta.") or "delta.`" in ident_lower:
+             return "DELTA_PATH"
+
         if asset_type == "FILE" or "/" in ident_lower:
             # Cloud Storage
             if ident_lower.startswith(("abfss:", "abfs:", "adl:", "wasb:")): return "ADLS"
