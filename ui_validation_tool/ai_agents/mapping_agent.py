@@ -25,6 +25,16 @@ class HybridResult(BaseModel):
     logic_summary: str = Field(description="Summary of the transformation logic")
     resolution_trace: List[str] = Field(description="Step-by-step resolution log")
     ignored_files: List[str] = Field(default=[], description="List of files ignored by Context Pruner")
+    token_stats: Dict[str, int] = Field(default={}, description="Token usage statistics (requests, input, output, total)")
+
+class FilterResult(BaseModel):
+    files: List[str] = Field(description="List of relevant filenames")
+
+class ExtractionResult(BaseModel):
+    """LLM Output Schema (No token_stats)."""
+    assets: List[DataAsset] = Field(description="List of all identified sources and targets")
+    logic_summary: str = Field(description="Summary of the transformation logic")
+    resolution_trace: List[str] = Field(description="Step-by-step resolution log")
 
 class MappingAgent:
     def __init__(self):
@@ -47,9 +57,9 @@ Rules:
    - Example: if task='process_sales', keep 'sales_etl.py' or 'process_sales_job.py'.
    - Include utils or shared modules ONLY if they seem critical for defining table names.
 3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
-4. **Output**: Return the list of relevant filenames as a simple JSON list of strings.
+4. **Output**: Return the list of relevant filenames.
 """,
-             output_type=List[str]
+             output_type=FilterResult
         )
 
         # --- Agent 2: Lineage Extractor ---
@@ -76,7 +86,7 @@ Rules:
    - `evidence`: Briefly explain where you found it (e.g., "Found in prod.yaml key 'source_table'").
 5. **Logic Summary**: Provide a brief 1-sentence summary of what the job does.
 """,
-            output_type=HybridResult
+            output_type=ExtractionResult
         )
 
     async def analyze_code_async(self, code_context: dict, on_log=None) -> HybridResult:
@@ -110,11 +120,11 @@ Rules:
                 filter_prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
                 filter_result = await Runner.run(self.filter_agent, filter_prompt)
                 
-                # Handle potential output wrapper
                 if hasattr(filter_result, "final_output_as"):
-                    relevant_files = filter_result.final_output_as(list)
-                else:
-                    relevant_files = filter_result
+                    filter_result = filter_result.final_output_as(FilterResult)
+                
+                # Unwrap the Pydantic model
+                relevant_files = filter_result.files
 
                 # Capture Token Usage
                 if hasattr(filter_result, "context_wrapper") and hasattr(filter_result.context_wrapper, "usage"):
@@ -180,7 +190,7 @@ Rules:
                      token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
                 
                 if hasattr(res, "final_output_as"):
-                    res = res.final_output_as(HybridResult)
+                    res = res.final_output_as(ExtractionResult)
                 
                 all_assets.extend(res.assets)
                 for t in res.resolution_trace: log(f"Config: {t}")
@@ -216,7 +226,7 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
                      token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
 
                 if hasattr(res, "final_output_as"):
-                    res = res.final_output_as(HybridResult)
+                    res = res.final_output_as(ExtractionResult)
                 
                 all_assets.extend(res.assets)
                 for t in res.resolution_trace: log(f"{fname}: {t}")
