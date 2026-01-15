@@ -103,28 +103,81 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
 if st.session_state['job_tasks']:
     st.markdown("### 2️⃣ Select Tasks to Analyze")
     
-    # Filter valid tasks (ignore unknown types if needed, though usually unknown is a valid type label. User said 'Do not show unknown types')
-    # Let's assume 'task_type' shouldn't be empty or None.
-    valid_tasks = [t for t in st.session_state['job_tasks'] if t.get('task_type')]
+    # 1. Filter Logic
+    valid_tasks = [
+        t for t in st.session_state['job_tasks'] 
+        if t.get('task_type') and t['task_type'].lower() != "unknown"
+    ]
     
-    col_sel1, col_sel2 = st.columns([1, 4])
-    with col_sel1:
-        select_all = st.checkbox("Select All", value=True)
-    
-    selected_tasks = []
-    
-    # Compact Grid Layout
-    with st.container():
-        # css for compact checkbox
+    if not valid_tasks:
+        st.warning("No valid tasks found (filtered out unknown/empty types).")
+    else:
+        # Initialize selection state if not present
+        if "task_selection" not in st.session_state:
+            st.session_state.task_selection = {t['task_key']: True for t in valid_tasks}
+            st.session_state.select_all_state = True
+
+        # Callbacks for Sync Logic
+        def on_select_all_change():
+            new_state = st.session_state.select_all_key
+            for t in valid_tasks:
+                st.session_state.task_selection[t['task_key']] = new_state
+
+        def on_task_change(t_key):
+            # Check if all are selected to update "Select All" visual
+            all_selected = all(st.session_state.task_selection.values())
+            st.session_state.select_all_state = all_selected
+
+        # "Select All" Checkbox
+        st.checkbox(
+            "Select All Valid Tasks", 
+            value=st.session_state.select_all_state,
+            key="select_all_key",
+            on_change=on_select_all_change
+        )
+        
+        # 2. Compact Grid Layout (3 Columns)
+        cols = st.columns(3)
         st.markdown("""<style>.stCheckbox { margin-bottom: -10px; }</style>""", unsafe_allow_html=True)
         
-        for task in valid_tasks:
-            is_checked = select_all
-            # Compact Label: Name (Type)
-            label = f"**{task['task_key']}** <span style='color:grey'>({task['task_type']})</span>"
+        selected_tasks_list = []
+        
+        for i, task in enumerate(valid_tasks):
+            col = cols[i % 3]
+            t_key = task['task_key']
             
-            if st.checkbox(label, value=is_checked, key=f"wk_{task['task_key']}", unsafe_allow_html=True):
-                selected_tasks.append(task)
+            # Ensure key exists in state (in case of new tasks loaded)
+            if t_key not in st.session_state.task_selection:
+                st.session_state.task_selection[t_key] = st.session_state.select_all_state
+
+            with col:
+                is_selected = st.checkbox(
+                    f"**{t_key}** ({task['task_type']})",
+                    value=st.session_state.task_selection[t_key],
+                    key=f"sel_{t_key}",
+                    # We can't directly bind to dynamic dict key in 'key' param, 
+                    # so we manage state manually via on_change or just read it back.
+                    # Actually, Streamlit 'key' stores in session_state, but we want a nested dict.
+                    # Simpler approach: Let Streamlit manage unique keys, we sync to our list.
+                )
+                # Update our tracking dict (Manual sync because 'key' writes to root session_state)
+                st.session_state.task_selection[t_key] = is_selected
+                
+                # Check for "Select All" desync (Optimization: do this once after loop or via callback? 
+                # Re-running loop update is fine for small N)
+            
+            if is_selected:
+                selected_tasks_list.append(task)
+        
+        # Update Select All state for next run (Feedback loop)
+        # This handles the "Unselect one -> Select All turns off" logic visually
+        if len(selected_tasks_list) < len(valid_tasks):
+             st.session_state.select_all_state = False
+        elif len(selected_tasks_list) == len(valid_tasks) and valid_tasks:
+             st.session_state.select_all_state = True
+        
+        # Assign to variable expected by Step 3
+        selected_tasks = selected_tasks_list
     
     st.caption(f"Selected {len(selected_tasks)} tasks.")
 
