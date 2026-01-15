@@ -79,12 +79,16 @@ Rules:
             output_type=HybridResult
         )
 
-    async def analyze_code_async(self, code_context: dict) -> HybridResult:
+    async def analyze_code_async(self, code_context: dict, on_log=None) -> HybridResult:
         """
         Executes the 2-Step Agentic Pipeline:
         1. File Filtering (LLM)
         2. Lineage Extraction (LLM)
         """
+        def log(msg):
+            resolution_trace.append(msg)
+            if on_log: on_log(msg)
+
         if not code_context:
             return HybridResult(assets=[], logic_summary="Empty context", resolution_trace=[])
 
@@ -99,7 +103,7 @@ Rules:
         ignored_files = []
         
         if len(all_files) > 1:
-            resolution_trace.append(f"Step 1: Filtering relevant files from {len(all_files)} candidates...")
+            log(f"Step 1: Filtering relevant files from {len(all_files)} candidates...")
             try:
                 filter_prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
                 filter_result = await Runner.run(self.filter_agent, filter_prompt)
@@ -113,22 +117,22 @@ Rules:
                 # Fallback safety
                 if not relevant_files:
                     relevant_files = all_files
-                    resolution_trace.append("  Filter returned empty, keeping all files.")
+                    log("  Filter returned empty, keeping all files.")
                 else:
                     ignored_files = list(set(all_files) - set(relevant_files))
                     logger.info(f"Context Pruner kept {len(relevant_files)}/{len(all_files)} files.")
                     logger.info(f"Relevant Files: {relevant_files}")
-                    resolution_trace.append(f"  Selected {len(relevant_files)} files: {relevant_files}")
+                    log(f"  Selected {len(relevant_files)} files: {relevant_files}")
                     if ignored_files:
-                        resolution_trace.append(f"  Ignored: {ignored_files}")
+                        log(f"  Ignored: {ignored_files}")
                         
             except Exception as e:
                 logger.error(f"Filtering failed: {e}")
-                resolution_trace.append(f"  Filtering failed ({e}), using all files.")
+                log(f"  Filtering failed ({e}), using all files.")
                 relevant_files = all_files
 
         # --- Step 2: Lineage Extraction ---
-        resolution_trace.append("Step 2: Extracting lineage (Batched Code/Config)...")
+        log("Step 2: Extracting lineage (Batched Code/Config)...")
         
         # Split into Configs (Context) and Scripts (Logic)
         config_files = []
@@ -153,7 +157,7 @@ Rules:
         # 2a. Analyze Configs (All together - usually low token count output)
         if config_context_str:
             try:
-                resolution_trace.append(f"Analyzing {len(config_files)} config files...")
+                log(f"Analyzing {len(config_files)} config files...")
                 config_prompt = f"Task Info: {task_info}\n\nAnalyze these CONFIGURATION files for finding source/target tables:\n{config_context_str}"
                 
                 res = await Runner.run(self.extraction_agent, config_prompt)
@@ -161,17 +165,17 @@ Rules:
                     res = res.final_output_as(HybridResult)
                 
                 all_assets.extend(res.assets)
-                resolution_trace.extend([f"Config: {t}" for t in res.resolution_trace])
+                for t in res.resolution_trace: log(f"Config: {t}")
             except Exception as e:
                 logger.error(f"Config analysis failed: {e}")
-                resolution_trace.append(f"Config analysis failed: {e}")
+                log(f"Config analysis failed: {e}")
 
         # 2b. Analyze Scripts (Sequentially - reduces burst output tokens)
         for fname in script_files:
             if fname not in code_context: continue
             
             try:
-                resolution_trace.append(f"Analyzing script: {fname}...")
+                log(f"Analyzing script: {fname}...")
                 content = code_context[fname]
                 
                 # Context includes Configs for reference + Current Script
@@ -189,11 +193,11 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
                     res = res.final_output_as(HybridResult)
                 
                 all_assets.extend(res.assets)
-                resolution_trace.extend([f"{fname}: {t}" for t in res.resolution_trace])
+                for t in res.resolution_trace: log(f"{fname}: {t}")
                 
             except Exception as e:
                 logger.error(f"Analysis of {fname} failed: {e}")
-                resolution_trace.append(f"Analysis of {fname} failed: {e}")
+                log(f"Analysis of {fname} failed: {e}")
 
         # Deduplicate Assets (by identifier)
         unique_assets = {}
@@ -235,6 +239,7 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             if ident_lower.endswith(".csv"): return "CSV_FILE"
             if ident_lower.endswith(".json"): return "JSON_FILE"
             if ident_lower.endswith(".avro"): return "AVRO_FILE"
+            if ident_lower.endswith(".xml"): return "XML_FILE"
             if ident_lower.endswith("delta_log"): return "DELTA_PATH"
             
             return "FILE_PATH"
@@ -255,7 +260,7 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             
         return "GENERIC_TABLE"
 
-    def analyze_code(self, code_context: dict) -> HybridResult:
+    def analyze_code(self, code_context: dict, on_log=None) -> HybridResult:
         """Sync wrapper."""
         try:
             loop = asyncio.get_event_loop()
@@ -265,6 +270,6 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
 
         if loop.is_running():
             nest_asyncio.apply()
-            return loop.run_until_complete(self.analyze_code_async(code_context))
-        return loop.run_until_complete(self.analyze_code_async(code_context))
+            return loop.run_until_complete(self.analyze_code_async(code_context, on_log))
+        return loop.run_until_complete(self.analyze_code_async(code_context, on_log))
 

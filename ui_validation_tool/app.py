@@ -93,7 +93,10 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
                     tasks = db_service.get_job_tasks(int(job_id_input))
                     st.session_state['job_tasks'] = tasks
                     
-                    st.success(f"✅ Found {len(tasks)} tasks!")
+                    # Log filtering stats
+                    valid_count = len([t for t in tasks if t.get('task_type') and t['task_type'].lower() != "unknown"])
+                    st.success(f"✅ Found {valid_count} valid tasks (and {len(tasks)-valid_count} ignored unknown/empty types).")
+
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
@@ -116,19 +119,51 @@ if st.session_state['job_tasks']:
         if "task_selection" not in st.session_state:
             st.session_state.task_selection = {t['task_key']: True for t in valid_tasks}
             st.session_state.select_all_state = True
+        
+        # Ensure filtering consistency: if new valid tasks appeared, track them
+        for t in valid_tasks:
+             if t['task_key'] not in st.session_state.task_selection:
+                 st.session_state.task_selection[t['task_key']] = True
 
-        # Callbacks for Sync Logic
+        # Callbacks for Sync Logic --------------------------------
         def on_select_all_change():
+            """Called when 'Select All' is toggled."""
             new_state = st.session_state.select_all_key
             for t in valid_tasks:
                 st.session_state.task_selection[t['task_key']] = new_state
+            
+            # Update the flag to match
+            st.session_state.select_all_state = new_state
 
-        def on_task_change(t_key):
-            # Check if all are selected to update "Select All" visual
-            all_selected = all(st.session_state.task_selection.values())
+        def on_individual_change():
+            """Called when ANY individual task checkbox is toggled."""
+            # We need to scan all checkboxes to see if all are selected
+            # Streamlit 'key' writes directly to session state.
+            
+            current_selections = []
+            for t in valid_tasks:
+                # Read the session state key for this checkbox
+                key = f"sel_{t['task_key']}"
+                if key in st.session_state:
+                     val = st.session_state[key]
+                     st.session_state.task_selection[t['task_key']] = val
+                     current_selections.append(val)
+            
+            all_selected = all(current_selections) if current_selections else False
+            
+            # Update 'Select All' state visually without triggering its callback loop
             st.session_state.select_all_state = all_selected
+            # We must also update the key binding for Select All if we want it to check/uncheck
+            # But changing 'select_all_key' might trigger its callback?
+            # Streamlit trick: Just update the value associated with the key?
+            # Actually, we can't easily update the specific 'select_all_key' widget state programmatically 
+            # while inside another callback unless we rerun.
+            # But the on_change triggers BEFORE this script reruns.
+            # So updating st.session_state.select_all_state (which is bound to 'value') should work on next render.
+        # ---------------------------------------------------------
 
         # "Select All" Checkbox
+        # We bind 'value' to a state variable that we manually update.
         st.checkbox(
             "Select All Valid Tasks", 
             value=st.session_state.select_all_state,
@@ -146,40 +181,23 @@ if st.session_state['job_tasks']:
             col = cols[i % 3]
             t_key = task['task_key']
             
-            # Ensure key exists in state (in case of new tasks loaded)
-            if t_key not in st.session_state.task_selection:
-                st.session_state.task_selection[t_key] = st.session_state.select_all_state
-
             with col:
+                # Bind value to our tracking dict.
+                # Bind on_change to update the 'Select All' master checkbox.
                 is_selected = st.checkbox(
                     f"**{t_key}** ({task['task_type']})",
                     value=st.session_state.task_selection[t_key],
                     key=f"sel_{t_key}",
-                    # We can't directly bind to dynamic dict key in 'key' param, 
-                    # so we manage state manually via on_change or just read it back.
-                    # Actually, Streamlit 'key' stores in session_state, but we want a nested dict.
-                    # Simpler approach: Let Streamlit manage unique keys, we sync to our list.
+                    on_change=on_individual_change
                 )
-                # Update our tracking dict (Manual sync because 'key' writes to root session_state)
-                st.session_state.task_selection[t_key] = is_selected
-                
-                # Check for "Select All" desync (Optimization: do this once after loop or via callback? 
-                # Re-running loop update is fine for small N)
             
             if is_selected:
                 selected_tasks_list.append(task)
         
-        # Update Select All state for next run (Feedback loop)
-        # This handles the "Unselect one -> Select All turns off" logic visually
-        if len(selected_tasks_list) < len(valid_tasks):
-             st.session_state.select_all_state = False
-        elif len(selected_tasks_list) == len(valid_tasks) and valid_tasks:
-             st.session_state.select_all_state = True
-        
         # Assign to variable expected by Step 3
         selected_tasks = selected_tasks_list
     
-    st.caption(f"Selected {len(selected_tasks)} tasks.")
+    st.caption(f"Selected {len(selected_tasks)} / {len(valid_tasks)} tasks.")
 
     # --- Step 3: Analysis & Validation (Combined) ---
     if st.button("🚀 Run AI Lineage Analysis"):
@@ -199,12 +217,19 @@ if st.session_state['job_tasks']:
                     
                     if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
                         # Append params
+                        # Append params
                         if job_params_input:
                             current_meta = code_context.get("__metadata__", "")
                             code_context["__metadata__"] = f"{current_meta}\nParameters: {job_params_input}"
                         
-                        # Analyze
-                        mapping = agent.analyze_code(code_context)
+                        # Analyze with Real-time Streaming
+                        st.markdown(f"**Analyzing {task['task_key']}...**")
+                        
+                        log_container = st.container(height=300)
+                        def stream_log(msg):
+                            log_container.write(msg)
+                            
+                        mapping = agent.analyze_code(code_context, on_log=stream_log)
                         
                         # Store raw results (assets object list)
                         results[task['task_key']] = {
