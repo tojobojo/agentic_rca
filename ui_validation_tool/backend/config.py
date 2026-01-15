@@ -9,6 +9,7 @@ load_dotenv()
 # fixing asyncio logs from litellm
 os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
+os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
 
 try:
     from agents.extensions.models.litellm_model import LitellmModel
@@ -45,7 +46,8 @@ class UIConfig(BaseModel):
     model_settings: ModelSettings = ModelSettings(
         temperature=temperature,
         max_tokens=max_tokens,
-        timeout=timeout
+        timeout=timeout,
+        include_usage=True
     )
     
     # Defaults

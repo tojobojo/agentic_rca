@@ -93,6 +93,8 @@ Rules:
             return HybridResult(assets=[], logic_summary="Empty context", resolution_trace=[])
 
         resolution_trace = []
+        token_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
         all_files = [f for f in code_context.keys() if f != "__metadata__"]
         
         # Metadata extraction
@@ -113,6 +115,14 @@ Rules:
                     relevant_files = filter_result.final_output_as(list)
                 else:
                     relevant_files = filter_result
+
+                # Capture Token Usage
+                if hasattr(filter_result, "context_wrapper") and hasattr(filter_result.context_wrapper, "usage"):
+                    u = filter_result.context_wrapper.usage
+                    token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
+                    token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
+                    token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
+                    token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
 
                 # Fallback safety
                 if not relevant_files:
@@ -161,6 +171,14 @@ Rules:
                 config_prompt = f"Task Info: {task_info}\n\nAnalyze these CONFIGURATION files for finding source/target tables:\n{config_context_str}"
                 
                 res = await Runner.run(self.extraction_agent, config_prompt)
+                # Capture Token Usage
+                if hasattr(res, "context_wrapper") and hasattr(res.context_wrapper, "usage"):
+                     u = res.context_wrapper.usage
+                     token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
+                     token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
+                     token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
+                     token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
+                
                 if hasattr(res, "final_output_as"):
                     res = res.final_output_as(HybridResult)
                 
@@ -189,6 +207,14 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
 {content}
 """
                 res = await Runner.run(self.extraction_agent, script_prompt)
+                # Capture Token Usage
+                if hasattr(res, "context_wrapper") and hasattr(res.context_wrapper, "usage"):
+                     u = res.context_wrapper.usage
+                     token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
+                     token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
+                     token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
+                     token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
+
                 if hasattr(res, "final_output_as"):
                     res = res.final_output_as(HybridResult)
                 
@@ -219,7 +245,8 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             assets=final_assets,
             logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
             resolution_trace=resolution_trace,
-            ignored_files=ignored_files
+            ignored_files=ignored_files,
+            token_stats=token_usage
         )
 
     def _classify_asset(self, identifier: str, asset_type: str) -> str:

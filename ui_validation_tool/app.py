@@ -234,16 +234,24 @@ if st.session_state['job_tasks']:
                         # Store raw results (assets object list)
                         results[task['task_key']] = {
                             "assets": [a.model_dump() for a in mapping.assets],
-                            "trace": mapping.resolution_trace
+                            "trace": mapping.resolution_trace,
+                            "token_stats": mapping.token_stats
                         }
                     else:
                         st.warning(f"Failed to get code for {task['task_key']}")
-                        results[task['task_key']] = {"assets": [], "trace": []}
+                        results[task['task_key']] = {"assets": [], "trace": [], "token_stats": {}}
                     
                     progress_bar.progress((i + 1) / len(selected_tasks))
                 
                 st.session_state['analysis_results'] = results
                 status.update(label="Analysis Complete!", state="complete", expanded=False)
+
+# --- Sidebar Stats ---
+if st.session_state['analysis_results']:
+    total_tokens = sum([t.get("token_stats", {}).get("total", 0) for t in st.session_state['analysis_results'].values()])
+    st.sidebar.markdown("### 📊 Analysis Stats")
+    st.sidebar.metric("Total Tokens (Est.)", total_tokens)
+
 
 # --- Step 4: Collapsible Results View ---
 if st.session_state['analysis_results']:
@@ -325,24 +333,17 @@ if st.session_state['analysis_results']:
                 "targets": targets
             }
 
-            if st.checkbox("Show Trace", key=f"trace_{task_key}"):
-                st.text("\n".join(data.get("trace", [])))
-
     # --- Validate & Save Button (Global) ---
     st.markdown("---")
     
     col_btn1, col_btn2 = st.columns([1, 4])
     with col_btn1:
         if st.button("🔎 Validate & Save", type="primary"):
+            validation_error_count = 0
+            
             with st.status("Validating Assets...", expanded=True) as status:
                 # 1. Collect all assets to validate
                 all_assets_to_validate = []
-                # Re-gather from session state which was just updated by data_editor interaction
-                # Note: Streamlit data_editor auto-updates session state if configured, but here we manually pushed back to data["assets"] above loop
-                # ACTUALLY: The loop above runs on RERUN. The button click triggers rerun. 
-                # So 'data["assets"]' IS updated with latest edits before this block runs?
-                # No, data_editor returns the *new* df. We updated `data["assets"]` inside the loop.
-                
                 count = 0
                 for t_key, t_data in st.session_state['analysis_results'].items():
                     for a in t_data.get("assets", []):
@@ -368,18 +369,46 @@ if st.session_state['analysis_results']:
                          if "✅" in status_msg: valid_count += 1
                          if "❌" in status_msg: invalid_count += 1
                 
-                st.success(f"Validation Complete! Valid: {valid_count}, Invalid: {invalid_count}")
-                status.update(label="Validation Complete!", state="complete", expanded=False)
+                validation_error_count = invalid_count
+                status.update(label=f"Done! {valid_count} Valid, {invalid_count} Issues.", state="complete", expanded=False)
+            
+            # Persistent Alert
+            if validation_error_count > 0:
+                st.error(f"⚠️ Validation finished with **{validation_error_count} issues**. Please review the items marked with ❌ above before saving.")
+                st.warning("You can fix the identifiers directly in the tables above and click 'Validate & Save' again.")
+            else:
+                st.success("✅ All assets validated successfully!")
                 
                 # 4. Save Manifest
                 output_path = "manifest.json"
                 with open(output_path, "w") as f:
                     json.dump(final_manifest, f, indent=2)
                 
-                st.success(f"✅ Manifest saved to `{output_path}`")
-                
-                # 5. Rerun to show updated statuses in the tables
-                st.rerun()
+                st.success(f"File saved to `{output_path}`")
+            
+            # 5. Rerun to show updated statuses in the tables (using a brief pause or just rerun)
+            # st.rerun() # Rerun clears the success/error messages! 
+            # Solution: We rely on the button callback flow. 
+            # To make the tables update, we NEED to rerun. 
+            # To keep the message, we can use session_state for the message.
+            
+            st.session_state['last_validation_msg'] = {
+                "type": "error" if validation_error_count > 0 else "success",
+                "count": validation_error_count
+            }
+            st.rerun()
+
+# Display Persistent Message if exists
+if 'last_validation_msg' in st.session_state:
+    msg = st.session_state['last_validation_msg']
+    if msg['type'] == 'error':
+        st.error(f"⚠️ Validation finished with **{msg['count']} issues**. Please review the items marked with ❌ above.")
+    else:
+        st.success("✅ All assets validated successfully! Manifest saved.")
+    
+    # Clear it so it doesn't stay forever if they change something
+    # But we want it to stay until next action? Let's leave it.
+    del st.session_state['last_validation_msg']
 
     with st.expander("View Generated JSON"):
         st.json(final_manifest)
