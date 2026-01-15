@@ -251,7 +251,7 @@ if st.session_state['analysis_results']:
                 st.dataframe(
                     assets, 
                     column_config={
-                        "confidence": st.column_config.TextColumn("Confidence", help="High=Config/Literal, Medium=Resolved, Low=Guessed"),
+                        "confidence": st.column_config.TextColumn("Confidence", help="High=Config/Explicit, Medium=Inferred, Low=Guessed"),
                         "identifier": "Asset",
                         "usage": "Usage",
                         "evidence": "Resolution Method"
