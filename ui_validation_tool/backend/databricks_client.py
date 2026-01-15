@@ -265,3 +265,74 @@ class DatabricksService:
                         files_dict[rel_path] = f"# Error reading file: {e}"
         
         return files_dict
+    def validate_assets(self, assets: List[Dict[str, Any]]) -> Dict[str, str]:
+        """
+        Validates the existence of the provided assets.
+        Returns a dict mapping Identifier -> Status Message (e.g. "✅ Exists", "❌ Not Found", "⚠️ External").
+        """
+        results = {}
+        
+        # Batching isn't really supported by these APIs, so we do sequential checks.
+        # Ideally, this should be parallelized or batched if the SDK supports it.
+        
+        for asset in assets:
+            ident = asset.get("identifier")
+            subtype = asset.get("subtype", "UNKNOWN")
+            
+            if not ident:
+                continue
+
+            try:
+                # 1. Unity Catalog / Hive Tables
+                if subtype in ["UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "GENERIC_TABLE"] or "TABLE" in subtype:
+                    try:
+                        self.client.tables.get(ident)
+                        results[ident] = "✅ Exists"
+                    except Exception as e:
+                        if "NOT_FOUND" in str(e):
+                            results[ident] = "❌ Not Found"
+                        else:
+                            # Could be permissions or other error
+                            results[ident] = f"⚠️ Check Failed: {str(e)[:50]}..."
+
+                # 2. Files / Paths
+                elif subtype in ["ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", "PARQUET_FILE", "CSV_FILE", "DELTA_PATH"] or "FILE" in subtype:
+                    # DBFS / Volumes
+                    if ident.startswith("dbfs:") or ident.startswith("/dbfs"):
+                         path = ident.replace("dbfs:", "/dbfs") if ident.startswith("dbfs:") else ident
+                         # Use dbfs api
+                         try:
+                             # We use the dbfs path format for get_status
+                             check_path = ident if ident.startswith("dbfs:") else f"dbfs:{ident}"
+                             self.client.dbfs.get_status(check_path)
+                             results[ident] = "✅ Exists"
+                         except Exception as e:
+                             if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                                 results[ident] = "❌ Not Found"
+                             else:
+                                 results[ident] = f"⚠️ Error: {str(e)[:30]}"
+
+                    elif ident.startswith("/Volumes") or ident.startswith("/Workspace"):
+                        try:
+                            self.client.files.get_metadata(ident)
+                            results[ident] = "✅ Exists"
+                        except Exception as e:
+                             if "NOT_FOUND" in str(e):
+                                 results[ident] = "❌ Not Found"
+                             else:
+                                 results[ident] = f"⚠️ Error: {str(e)[:30]}"
+                    
+                    elif "abfss" in ident or "s3" in ident:
+                        # Cannot validate cloud paths without compute
+                        results[ident] = "⚠️ Skipped (External)"
+                    
+                    else:
+                        results[ident] = "❔ Unchecked"
+                
+                else:
+                    results[ident] = "❔ Unchecked Type"
+
+            except Exception as e:
+                results[ident] = f"⚠️ Error: {str(e)}"
+        
+        return results

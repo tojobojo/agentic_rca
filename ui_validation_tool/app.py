@@ -258,21 +258,16 @@ if st.session_state['analysis_results']:
         with st.expander(f"📌 {task_key}", expanded=False):
             
             # Prepare Data for Editor
-            # We want columns: [Subtype (Dropdown)] [Identifier (Text)] [Usage (Hidden/Fixed? Or Dropdown?)]
-            # User design showed: [Catalog v] [Editable Text Field] [X]
-            # So 'Subtype' is the dropdown. 'Identifier' is the text.
-            
             current_assets = data.get("assets", [])
             df = pd.DataFrame(current_assets)
             
             if df.empty:
-                # Initialize empty structure if no assets found
-                df = pd.DataFrame(columns=["subtype", "identifier", "usage", "confidence", "asset_type"])
+                df = pd.DataFrame(columns=["subtype", "identifier", "usage", "confidence", "asset_type", "validation_status"])
             
-            # Simplified columns for the view
-            # If usage is mixed (Source/Target), we probably need to show it or split tables?
-            # View.png implies a single list. Let's show Usage too so user knows if it's Source or Target.
-            
+            # Ensure validation_status exists
+            if "validation_status" not in df.columns:
+                df["validation_status"] = "❔ Unchecked"
+
             # Editor Configuration
             edited_df = st.data_editor(
                 df,
@@ -280,6 +275,7 @@ if st.session_state['analysis_results']:
                 use_container_width=True,
                 key=f"editor_{task_key}",
                 column_config={
+                    "validation_status": st.column_config.TextColumn("Status", width="small", help="Result of validation check"),
                     "subtype": st.column_config.SelectboxColumn(
                         "Type",
                         options=[
@@ -293,7 +289,8 @@ if st.session_state['analysis_results']:
                     "identifier": st.column_config.TextColumn(
                         "Source/Target Name",
                         required=True,
-                        width="large"
+                        width="large",
+                        help="Full path or table name"
                     ),
                     "usage": st.column_config.SelectboxColumn(
                         "Usage",
@@ -306,17 +303,16 @@ if st.session_state['analysis_results']:
                     "confidence": None,
                     "evidence": None
                 },
-                column_order=["usage", "subtype", "identifier"]
+                column_order=["validation_status", "usage", "subtype", "identifier"]
             )
             
-            # Update session state with edits (so they persist across reruns/expansions)
-            # data["assets"] = edited_df.to_dict("records") 
-            # Note: Streamlit data_editor updates session_state automatically if key is set, 
-            # but we need to capture the *output* of the editor function to get the current state for saving.
-            
-            # We'll construct the manifest chunk right here
+            # Construct Manifest Chunk from *Edited* Data
             sources = []
             targets = []
+            
+            # Convert back to list of dicts for session state update (to persist edits)
+            updated_assets_list = edited_df.to_dict("records")
+            data["assets"] = updated_assets_list
             
             for _, row in edited_df.iterrows():
                 if row["usage"] == "SOURCE":
@@ -329,19 +325,63 @@ if st.session_state['analysis_results']:
                 "targets": targets
             }
 
-            # Optional: Show Trace
             if st.checkbox("Show Trace", key=f"trace_{task_key}"):
                 st.text("\n".join(data.get("trace", [])))
 
-    # --- Save Button (Global) ---
+    # --- Validate & Save Button (Global) ---
     st.markdown("---")
-    if st.button("💾 Save Manifest to JSON", type="primary"):
-        output_path = "manifest.json"
-        with open(output_path, "w") as f:
-            json.dump(final_manifest, f, indent=2)
-        
-        st.success(f"✅ Manifest saved to `{output_path}`")
-        with st.expander("View Generated JSON"):
-            st.json(final_manifest)
+    
+    col_btn1, col_btn2 = st.columns([1, 4])
+    with col_btn1:
+        if st.button("🔎 Validate & Save", type="primary"):
+            with st.status("Validating Assets...", expanded=True) as status:
+                # 1. Collect all assets to validate
+                all_assets_to_validate = []
+                # Re-gather from session state which was just updated by data_editor interaction
+                # Note: Streamlit data_editor auto-updates session state if configured, but here we manually pushed back to data["assets"] above loop
+                # ACTUALLY: The loop above runs on RERUN. The button click triggers rerun. 
+                # So 'data["assets"]' IS updated with latest edits before this block runs?
+                # No, data_editor returns the *new* df. We updated `data["assets"]` inside the loop.
+                
+                count = 0
+                for t_key, t_data in st.session_state['analysis_results'].items():
+                    for a in t_data.get("assets", []):
+                        all_assets_to_validate.append(a)
+                        count += 1
+                
+                st.write(f"Validating {count} assets against Databricks...")
+                
+                # 2. Call Backend
+                db_service = DatabricksService()
+                validation_results = db_service.validate_assets(all_assets_to_validate)
+                
+                # 3. Update Status in Session State
+                valid_count = 0
+                invalid_count = 0
+                
+                for t_key, t_data in st.session_state['analysis_results'].items():
+                    for a in t_data.get("assets", []):
+                         ident = a.get("identifier")
+                         status_msg = validation_results.get(ident, "❔ Unchecked")
+                         a["validation_status"] = status_msg
+                         
+                         if "✅" in status_msg: valid_count += 1
+                         if "❌" in status_msg: invalid_count += 1
+                
+                st.success(f"Validation Complete! Valid: {valid_count}, Invalid: {invalid_count}")
+                status.update(label="Validation Complete!", state="complete", expanded=False)
+                
+                # 4. Save Manifest
+                output_path = "manifest.json"
+                with open(output_path, "w") as f:
+                    json.dump(final_manifest, f, indent=2)
+                
+                st.success(f"✅ Manifest saved to `{output_path}`")
+                
+                # 5. Rerun to show updated statuses in the tables
+                st.rerun()
+
+    with st.expander("View Generated JSON"):
+        st.json(final_manifest)
 
 
