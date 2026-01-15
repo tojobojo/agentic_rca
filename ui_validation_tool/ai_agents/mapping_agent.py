@@ -114,6 +114,8 @@ Rules:
                     resolution_trace.append("  Filter returned empty, keeping all files.")
                 else:
                     ignored_files = list(set(all_files) - set(relevant_files))
+                    logger.info(f"Context Pruner kept {len(relevant_files)}/{len(all_files)} files.")
+                    logger.info(f"Relevant Files: {relevant_files}")
                     resolution_trace.append(f"  Selected {len(relevant_files)} files: {relevant_files}")
                     if ignored_files:
                         resolution_trace.append(f"  Ignored: {ignored_files}")
@@ -124,43 +126,92 @@ Rules:
                 relevant_files = all_files
 
         # --- Step 2: Lineage Extraction ---
-        resolution_trace.append("Step 2: Extracting lineage from selected files...")
+        resolution_trace.append("Step 2: Extracting lineage (Batched Code/Config)...")
         
-        # Prepare context for the extraction agent
-        # We construct a string or dict representation of the file contents.
-        # To avoid token limits, we might want to truncate very large files, but for now we pass mostly raw.
-        extraction_context = ""
-        for fname in relevant_files:
-            if fname in code_context:
-                content = code_context[fname]
-                extraction_context += f"\n--- FILE: {fname} ---\n{content}\n"
-
-        try:
-            extraction_prompt = f"Task Info: {task_info}\n\nCode and Config Context:\n{extraction_context}"
-            
-            result = await Runner.run(self.extraction_agent, extraction_prompt)
-            
-            if hasattr(result, "final_output_as"):
-                extraction_result = result.final_output_as(HybridResult)
+        # Split into Configs (Context) and Scripts (Logic)
+        config_files = []
+        script_files = []
+        
+        for f in relevant_files:
+            # Heuristic: Configs are yaml/json or in conf folders
+            is_config = any(f.endswith(ext) for ext in ['.yaml', '.yml', '.json', '.toml', '.ini'])
+            if is_config or 'conf/' in f or 'config/' in f:
+                config_files.append(f)
             else:
-                extraction_result = result
+                script_files.append(f)
+        
+        # Prepare Shared Config Content
+        config_context_str = ""
+        for fname in config_files:
+            if fname in code_context:
+                config_context_str += f"\n--- CONFIG: {fname} ---\n{code_context[fname]}\n"
 
-            # Merge traces
-            final_trace = resolution_trace + extraction_result.resolution_trace
-            extraction_result.resolution_trace = final_trace
-            extraction_result.ignored_files = ignored_files
+        all_assets = []
+        
+        # 2a. Analyze Configs (All together - usually low token count output)
+        if config_context_str:
+            try:
+                resolution_trace.append(f"Analyzing {len(config_files)} config files...")
+                config_prompt = f"Task Info: {task_info}\n\nAnalyze these CONFIGURATION files for finding source/target tables:\n{config_context_str}"
+                
+                res = await Runner.run(self.extraction_agent, config_prompt)
+                if hasattr(res, "final_output_as"):
+                    res = res.final_output_as(HybridResult)
+                
+                all_assets.extend(res.assets)
+                resolution_trace.extend([f"Config: {t}" for t in res.resolution_trace])
+            except Exception as e:
+                logger.error(f"Config analysis failed: {e}")
+                resolution_trace.append(f"Config analysis failed: {e}")
+
+        # 2b. Analyze Scripts (Sequentially - reduces burst output tokens)
+        for fname in script_files:
+            if fname not in code_context: continue
             
-            return extraction_result
+            try:
+                resolution_trace.append(f"Analyzing script: {fname}...")
+                content = code_context[fname]
+                
+                # Context includes Configs for reference + Current Script
+                script_prompt = f"""
+Task Info: {task_info}
 
-        except Exception as e:
-            logger.error(f"Extraction failed: {e}")
-            resolution_trace.append(f"Extraction failed: {e}")
-            return HybridResult(
-                assets=[], 
-                logic_summary=f"Error during extraction: {e}", 
-                resolution_trace=resolution_trace,
-                ignored_files=ignored_files
-            )
+Generic Config Context (For Reference Only - Do not re-extract assets from here unless used in code):
+{config_context_str}
+
+--- CODE TO ANALYZE ({fname}) ---
+{content}
+"""
+                res = await Runner.run(self.extraction_agent, script_prompt)
+                if hasattr(res, "final_output_as"):
+                    res = res.final_output_as(HybridResult)
+                
+                all_assets.extend(res.assets)
+                resolution_trace.extend([f"{fname}: {t}" for t in res.resolution_trace])
+                
+            except Exception as e:
+                logger.error(f"Analysis of {fname} failed: {e}")
+                resolution_trace.append(f"Analysis of {fname} failed: {e}")
+
+        # Deduplicate Assets (by identifier)
+        unique_assets = {}
+        for a in all_assets:
+            if a.identifier not in unique_assets:
+                unique_assets[a.identifier] = a
+            else:
+                # Keep the one with higher confidence if duplicate
+                existing = unique_assets[a.identifier]
+                if a.confidence == "HIGH" and existing.confidence != "HIGH":
+                    unique_assets[a.identifier] = a
+
+        final_assets = list(unique_assets.values())
+        
+        return HybridResult(
+            assets=final_assets,
+            logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
+            resolution_trace=resolution_trace,
+            ignored_files=ignored_files
+        )
 
     def analyze_code(self, code_context: dict) -> HybridResult:
         """Sync wrapper."""
