@@ -17,10 +17,11 @@ class DatabricksService:
         self.client = WorkspaceClient()
 
     def _get_spark(self):
-        """Attempts to return a DatabricksSession if available."""
+        """Attempts to return a DatabricksSession if available (Serverless)."""
         try:
             from databricks.connect import DatabricksSession
-            return DatabricksSession.builder.getOrCreate()
+            # User requested serverless builder
+            return DatabricksSession.builder.serverless().getOrCreate()
         except ImportError:
             return None
         except Exception as e:
@@ -304,7 +305,8 @@ class DatabricksService:
                         # Format status message: ✅ Exists (EXTERNAL, DELTA)
                         results[ident] = f"✅ Exists ({t_type}, {t_fmt})"
                     except Exception as e:
-                        if "NOT_FOUND" in str(e):
+                        err_str = str(e)
+                        if "NOT_FOUND" in err_str or "does not exist" in err_str.lower():
                             results[ident] = "❌ Not Found"
                         else:
                             # Could be permissions or other error

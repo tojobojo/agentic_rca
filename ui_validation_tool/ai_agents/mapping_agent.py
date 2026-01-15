@@ -120,12 +120,6 @@ Rules:
                 filter_prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
                 filter_result = await Runner.run(self.filter_agent, filter_prompt)
                 
-                if hasattr(filter_result, "final_output_as"):
-                    filter_result = filter_result.final_output_as(FilterResult)
-                
-                # Unwrap the Pydantic model
-                relevant_files = filter_result.files
-
                 # Capture Token Usage
                 if hasattr(filter_result, "context_wrapper") and hasattr(filter_result.context_wrapper, "usage"):
                     u = filter_result.context_wrapper.usage
@@ -133,6 +127,12 @@ Rules:
                     token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
                     token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
                     token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
+
+                if hasattr(filter_result, "final_output_as"):
+                    filter_result = filter_result.final_output_as(FilterResult)
+                
+                # Unwrap the Pydantic model
+                relevant_files = filter_result.files
 
                 # Fallback safety
                 if not relevant_files:

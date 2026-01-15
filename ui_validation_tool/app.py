@@ -366,8 +366,11 @@ if st.session_state['analysis_results']:
                          status_msg = validation_results.get(ident, "❔ Unchecked")
                          a["validation_status"] = status_msg
                          
-                         if "✅" in status_msg: valid_count += 1
-                         if "❌" in status_msg: invalid_count += 1
+                         if "✅" in status_msg: 
+                             valid_count += 1
+                         else:
+                             # Strict Mode: Any warning (⚠️) or error (❌) is an issue
+                             invalid_count += 1
                 
                 validation_error_count = invalid_count
                 status.update(label=f"Done! {valid_count} Valid, {invalid_count} Issues.", state="complete", expanded=False)
