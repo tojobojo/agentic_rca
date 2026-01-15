@@ -14,8 +14,18 @@ logger = logging.getLogger(__name__)
 class DatabricksService:
     def __init__(self):
         self.config = get_config()
-        # We instantiate WorkspaceClient without arguments.
         self.client = WorkspaceClient()
+
+    def _get_spark(self):
+        """Attempts to return a DatabricksSession if available."""
+        try:
+            from databricks.connect import DatabricksSession
+            return DatabricksSession.builder.getOrCreate()
+        except ImportError:
+            return None
+        except Exception as e:
+            logger.warning(f"Spark connection failed: {e}")
+            return None
 
     def get_job(self, job_id: int) -> Dict[str, Any]:
         """Fetch full job definition."""
@@ -328,8 +338,27 @@ class DatabricksService:
                                  results[ident] = f"⚠️ Error: {str(e)[:30]}"
                     
                     elif "abfss" in ident or "s3" in ident:
-                        # Cannot validate cloud paths without compute
-                        results[ident] = "⚠️ Skipped (External)"
+                        # Try validation via Spark if available (Databricks Connect)
+                        spark = self._get_spark()
+                        if spark:
+                            try:
+                                # User Request: DESCRIBE DETAIL '{path}'
+                                res_df = spark.sql(f"DESCRIBE DETAIL '{ident}'").collect()
+                                if res_df:
+                                    row = res_df[0].asDict()
+                                    fmt = row.get("format", "UNKNOWN").upper()
+                                    results[ident] = f"✅ Exists ({fmt})"
+                                else:
+                                    results[ident] = "❌ Not Found (Empty Detail)"
+                            except Exception as e:
+                                err = str(e)
+                                if "Path does not exist" in err or "FileNotFoundException" in err:
+                                    results[ident] = "❌ Not Found"
+                                else:
+                                    results[ident] = f"⚠️ Spark Error: {err[:40]}..."
+                        else:
+                             # Cannot validate cloud paths without compute
+                             results[ident] = "⚠️ Skipped (No Spark)"
                     
                     else:
                         results[ident] = "❔ Unchecked"

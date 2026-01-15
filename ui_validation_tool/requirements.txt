@@ -6,3 +6,4 @@ pydantic>=2.5.2
 gitpython>=3.1.40
 litellm>=1.0.0
 pandas
+databricks-connect
