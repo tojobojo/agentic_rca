@@ -55,12 +55,13 @@ Rules:
 1. **Config Files**: ALWAYS keep configuration files that appear to be for PRODUCTION (e.g., 'conf/prod/sales.yaml', 'prod.json'). 
    - IGNORE 'dev', 'staging', or 'test' configs unless no other configs exist.
    - If a file is just 'config.yaml', keep it.
-2. **Prioritize Entry Points**:
-   - Look at the `Entry Point` (script path) in Task Info. This is the ROOT of the Logic.
-   - **Task Name Match**: Check if a filename or folder path matches the `Task Name` (e.g., Task 'SalesJob' -> `sales_job.py` or /sales/job.py). 
-   - Keep files that are likely IMPORTED by the Entry Point (recursively).
-   - **Task Isolation**: If multiple tasks share a folder/wheel, use the `Entry Point`, `Parameters`, and `Task Name` to identify the specific logic flow.
-   - Ignore sibling scripts that define DIFFERENT jobs (e.g. if entry point is `job_A.py`, ignore `job_B.py` in the same folder).
+2. **Focus on Task Name**:
+   - The `Task Name` is your primary key. Look for a file/folder that matches it (fuzzy match).
+   - Example: Task `process_sales` -> `sales.py`, `jobs/process_sales.py`.
+   - **Crucial**: If the `Entry Point` (e.g. `main.py`) imports MANY job modules, you must **IGNORE** the Entry Point's broad imports.
+   - Select ONLY the specific module corresponding to the Task Name.
+   - **Isolation**: DISCARD any script that looks like a sibling task (e.g. `job_b.py` when analyzing `job_a`).
+   - Include utils or shared modules ONLY if they seem critical for defining table names.
 3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
 4. **Output**: Return the list of relevant filenames.
 """,
