@@ -374,3 +374,50 @@ class DatabricksService:
                 results[ident] = f"⚠️ Error: {str(e)}"
         
         return results
+
+    def save_manifest_to_table(self, table_name: str, manifest: Dict[str, Any], job_id: str, version: str = "1.0") -> str:
+        """Saves the generated manifest to a Delta table."""
+        spark = self._get_spark()
+        if not spark:
+            return "❌ Spark connection unavailable (Databricks Connect required). Cannot save to table."
+
+        import datetime
+        import uuid
+        from pyspark.sql.types import StructType, StructField, StringType, TimestampType
+
+        try:
+            # 1. Define Schema
+            schema = StructType([
+                StructField("id", StringType(), False),
+                StructField("job_id", StringType(), True),
+                StructField("manifest", StringType(), True),
+                StructField("version", StringType(), True),
+                StructField("date", TimestampType(), True),
+                StructField("created_by", StringType(), True)
+            ])
+
+            # 2. Prepare Data
+            current_user = self.client.current_user.me().user_name
+            
+            data = [{
+                "id": str(uuid.uuid4()),
+                "job_id": str(job_id),
+                "manifest": json.dumps(manifest),
+                "version": version,
+                "date": datetime.datetime.now(),
+                "created_by": current_user
+            }]
+
+            # 3. Create DataFrame
+            df = spark.createDataFrame(data, schema=schema)
+            
+            # 4. Write to Delta Table (Append or Create)
+            # This requires the cluster to have permissions on the catalog/schema
+            logger.info(f"Saving manifest to {table_name}...")
+            df.write.format("delta").mode("append").saveAsTable(table_name)
+            
+            return f"✅ Successfully saved manifest to table `{table_name}`."
+
+        except Exception as e:
+            logger.error(f"Failed to save to table {table_name}: {e}")
+            return f"❌ Error saving to table: {str(e)[:100]}..."

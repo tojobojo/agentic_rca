@@ -67,6 +67,12 @@ with st.sidebar:
     
     st.markdown("### ⚙️ Job Parameters")
     job_params_input = st.text_area("JSON Parameters", value='{"env": "prod"}', height=100)
+
+    st.markdown("### 💾 History Config")
+    # Read from Config (Env Var)
+    history_table = config.history_table
+    st.text_input("History Table (Read-only)", value=history_table, disabled=True, help="Target Delta table (set via HISTORY_TABLE env var)")
+    manifest_version_input = st.text_input("Manifest Version", value="1.0", help="Version tag for this run")
     
     st.markdown("---")
     st.markdown("### ℹ️ Help")
@@ -392,6 +398,22 @@ if st.session_state['analysis_results']:
                     json.dump(final_manifest, f, indent=2)
                 
                 st.success(f"File saved to `{output_path}`")
+                
+                # 5. Save to Delta Table (if configured)
+                if history_table:
+                     with st.spinner(f"Saving to history table `{history_table}`..."):
+                        save_res = db_service.save_manifest_to_table(
+                             table_name=history_table,
+                             manifest=final_manifest,
+                             job_id=job_id_input if job_id_input else "unknown",
+                             version=manifest_version_input
+                        )
+                        if "✅" in save_res:
+                            st.toast(save_res, icon="✅")
+                            # Append to persisted success message
+                            st.session_state['last_table_msg'] = save_res
+                        else:
+                            st.error(save_res)
             
             # 5. Rerun to show updated statuses in the tables (using a brief pause or just rerun)
             # st.rerun() # Rerun clears the success/error messages! 
@@ -412,6 +434,9 @@ if 'last_validation_msg' in st.session_state:
         st.error(f"⚠️ Validation finished with **{msg['count']} issues**. Please review the items marked with ❌ above.")
     else:
         st.success("✅ All assets validated successfully! Manifest saved.")
+        if 'last_table_msg' in st.session_state:
+             st.info(st.session_state['last_table_msg'])
+             del st.session_state['last_table_msg']
     
     # Clear it so it doesn't stay forever if they change something
     # But we want it to stay until next action? Let's leave it.

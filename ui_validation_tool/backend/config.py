@@ -50,6 +50,9 @@ class UIConfig(BaseModel):
     temp_dir: str = os.path.join(os.getcwd(), "temp_ui_cache")
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
+    # Feature Flags / Extras
+    history_table: str = os.getenv("HISTORY_TABLE", "main.rca_history.manifest_log")
+
     def validate(self):
         errors = []
         if not self.databricks_host: errors.append("DATABRICKS_HOST is missing.")
