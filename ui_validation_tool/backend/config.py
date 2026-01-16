@@ -11,11 +11,7 @@ os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
 os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
 
-try:
-    from agents.extensions.models.litellm_model import LitellmModel
-except ImportError:
-    LitellmModel = None
-    pass
+from agents.extensions.models.litellm_model import LitellmModel
 
 from agents import set_tracing_disabled, ModelSettings
 

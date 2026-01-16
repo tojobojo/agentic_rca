@@ -21,7 +21,7 @@ class DatabricksService:
         try:
             from databricks.connect import DatabricksSession
             # User requested serverless builder
-            return DatabricksSession.builder.serverless().getOrCreate()
+            return DatabricksSession.builder.getOrCreate()
         except ImportError:
             return None
         except Exception as e:
@@ -105,7 +105,9 @@ class DatabricksService:
         # Metadata header as a string to be pre-pended or handled by agent 
         # (Actually implementation plan said to extract it, but here we can include it in the dict)
         metadata_content = f"Task: {task.get('task_key')}\nType: {task_type}\n"
+        if script_path: metadata_content += f"Entry Point: {script_path}\n"
         if task.get("package_name"): metadata_content += f"Package: {task.get('package_name')}\n"
+        # Parameters are critical for isolation in shared wheels
         if task.get("parameters"): metadata_content += f"Parameters: {task.get('parameters')}\n"
         
         result = {"__metadata__": metadata_content}

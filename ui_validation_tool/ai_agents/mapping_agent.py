@@ -25,6 +25,8 @@ class HybridResult(BaseModel):
     logic_summary: str = Field(description="Summary of the transformation logic")
     resolution_trace: List[str] = Field(description="Step-by-step resolution log")
     ignored_files: List[str] = Field(default=[], description="List of files ignored by Context Pruner")
+    # Added source_files to track what was analyzed (Source of Truth for Manifest)
+    source_files: List[str] = Field(default=[], description="List of files that were actually analyzed")
     token_stats: Dict[str, int] = Field(default={}, description="Token usage statistics (requests, input, output, total)")
 
 class FilterResult(BaseModel):
@@ -53,9 +55,12 @@ Rules:
 1. **Config Files**: ALWAYS keep configuration files that appear to be for PRODUCTION (e.g., 'conf/prod/sales.yaml', 'prod.json'). 
    - IGNORE 'dev', 'staging', or 'test' configs unless no other configs exist.
    - If a file is just 'config.yaml', keep it.
-2. **Task Relevance**: Identify the main script based on the Task Name.
-   - Example: if task='process_sales', keep 'sales_etl.py' or 'process_sales_job.py'.
-   - Include utils or shared modules ONLY if they seem critical for defining table names.
+2. **Prioritize Entry Points**:
+   - Look at the `Entry Point` (script path) in Task Info. This is the ROOT of the Logic.
+   - **Task Name Match**: Check if a filename or folder path matches the `Task Name` (e.g., Task 'SalesJob' -> `sales_job.py` or /sales/job.py). 
+   - Keep files that are likely IMPORTED by the Entry Point (recursively).
+   - **Task Isolation**: If multiple tasks share a folder/wheel, use the `Entry Point`, `Parameters`, and `Task Name` to identify the specific logic flow.
+   - Ignore sibling scripts that define DIFFERENT jobs (e.g. if entry point is `job_A.py`, ignore `job_B.py` in the same folder).
 3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
 4. **Output**: Return the list of relevant filenames.
 """,
@@ -256,6 +261,7 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
             resolution_trace=resolution_trace,
             ignored_files=ignored_files,
+            source_files=relevant_files, # Capture Source Files
             token_stats=token_usage
         )
 

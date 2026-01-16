@@ -235,7 +235,10 @@ if st.session_state['job_tasks']:
                         results[task['task_key']] = {
                             "assets": [a.model_dump() for a in mapping.assets],
                             "trace": mapping.resolution_trace,
-                            "token_stats": mapping.token_stats
+                            "assets": [a.model_dump() for a in mapping.assets],
+                            "trace": mapping.resolution_trace,
+                            "token_stats": mapping.token_stats,
+                            "source_files": mapping.source_files
                         }
                     else:
                         st.warning(f"Failed to get code for {task['task_key']}")
@@ -330,7 +333,8 @@ if st.session_state['analysis_results']:
             
             final_manifest[task_key] = {
                 "sources": sources,
-                "targets": targets
+                "targets": targets,
+                "source_files": data.get("source_files", [])
             }
 
     # --- Validate & Save Button (Global) ---
