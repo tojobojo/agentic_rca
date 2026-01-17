@@ -69,14 +69,18 @@ class ObservabilityCollector:
         run_end = run.end_time or int(datetime.now().timestamp() * 1000)
         
         metrics = []
-        
         # 2. Get Lineage (Source/Target Tables)
-        # We use the existing lineage_client logic which supports a fallback manifest
-        from utils.lineage_client import get_step_tables
-        task_keys = [t.task_key for t in run.tasks or []]
-        table_map = get_step_tables(run.job_id, task_keys) # Returns {task_key: {sources: [], targets: []}}
+        # We use the Manifest Client to read the source of truth
+        from utils.manifest_client import ManifestClient
+        manifest_client = ManifestClient()
         
-        # 3. Iterate through tasks
+        # Prefetch manifest for the job once
+        manifest_data = manifest_client.get_latest_manifest(job_id)
+        if not manifest_data:
+            logger.warning(f"No manifest found for Job {job_id}. Lineage-based metrics will be skipped.")
+            return []
+            
+        logger.info(f"Loaded manifest for Job {job_id} with {len(manifest_data)} tasks/steps.")
         for task in run.tasks or []:
             task_key = task.task_key
             
@@ -95,9 +99,10 @@ class ObservabilityCollector:
             #     logger.info(f"Skipping Task '{task_key}' (Type: {task_type}) - Logical control flow only.")
             #     continue
 
-            tables = table_map.get(task_key, {})
-            sources = tables.get("sources", [])
-            targets = tables.get("targets", [])
+            # Lookup tables in manifest
+            task_lineage = manifest_data.get(task_key, {})
+            sources = task_lineage.get("sources", [])
+            targets = task_lineage.get("targets", [])
             
             logger.info(f"Processing Task '{task_key}' (Type: {task_type}): Sources={sources}, Targets={targets}")
             

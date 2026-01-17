@@ -102,9 +102,8 @@ class Config(BaseModel):
     databricks_host: str = ""
     databricks_token: str = ""
     
-    # GitLab Settings
-    gitlab_url: str = ""
-    gitlab_token: str = ""
+    # Manifest Table (Source of Truth for Lineage)
+    manifest_table: str = "main.rca_history.manifest_log"
     
     # OpenAI Settings
     openai_api_key: str = ""
@@ -128,7 +127,7 @@ class Config(BaseModel):
     llm_max_retries: int = Field(default=3, ge=1, le=10)
     llm_retry_delay_seconds: int = Field(default=2, ge=1)
     
-    @field_validator('databricks_host', 'gitlab_url')
+    @field_validator('databricks_host')
     @classmethod
     def validate_url(cls, v: str) -> str:
         """Validate URL format if provided."""
@@ -152,13 +151,9 @@ class Config(BaseModel):
             errors.append(
                 "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
             )
-        if not self.gitlab_url:
+        if not self.openai_api_key:
             errors.append(
-                "GITLAB_URL is required for code discovery. Example: https://gitlab.com/your-org/your-repo.git"
-            )
-        if not self.gitlab_token:
-            errors.append(
-                "GITLAB_TOKEN is required for code discovery. Example: https://gitlab.com/your-org/your-repo.git"
+                "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
             )
         return errors
     
@@ -172,8 +167,8 @@ class Config(BaseModel):
         return cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
-            gitlab_url=os.getenv("GITLAB_URL", ""),
-            gitlab_token=os.getenv("GITLAB_TOKEN", ""),
+            databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
+            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "main.rca_history.manifest_log"),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
             metrics_table=os.getenv("RCA_METRICS_TABLE", "rca_catalog.default.metrics_history"),
@@ -208,8 +203,8 @@ class Config(BaseModel):
                 return cls(
                     databricks_host=spark.conf.get("spark.databricks.workspaceUrl", ""),
                     databricks_token=dbutils.secrets.get(scope, "databricks_token"),
-                    gitlab_url=dbutils.secrets.get(scope, "gitlab_url"),
-                    gitlab_token=dbutils.secrets.get(scope, "gitlab_token"),
+                    databricks_token=dbutils.secrets.get(scope, "databricks_token"),
+                    # gitlab removed
                     openai_api_key=dbutils.secrets.get(scope, "openai_api_key"),
                 )
         except Exception as e:
