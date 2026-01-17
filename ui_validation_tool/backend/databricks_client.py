@@ -278,6 +278,7 @@ class DatabricksService:
                         files_dict[rel_path] = f"# Error reading file: {e}"
         
         return files_dict
+
     def validate_assets(self, assets: List[Dict[str, Any]]) -> Dict[str, str]:
         """
         Validates the existence of the provided assets.

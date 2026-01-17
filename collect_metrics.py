@@ -49,17 +49,15 @@ def main():
             logger.error(f"Failed to find latest run: {e}")
             return
     
-    logger.info(f"Starting Metrics Collection for Run ID: {run_id}")
+    logger.info(f"Starting Metrics Sync for Job ID: {args.job_id}")
     
     try:
         collector = ObservabilityCollector()
-        metrics = collector.collect_job_metrics(run_id, args.job_id)
+        # New Sync Logic covers backfill and incremental
+        collector.sync_metrics(args.job_id)
         
-        if metrics:
-            print(f"✓ Successfully collected {len(metrics)} metric records")
-            print(f"✓ Metrics written to: {collector.config.metrics_table}")
-        else:
-            print("⚠ No metrics collected (or run failed to fetch tasks)")
+        print(f"✓ Metrics Sync Completed for Job {args.job_id}")
+            
             
     except Exception as e:
         logger.error(f"Fatal error during collection: {e}")

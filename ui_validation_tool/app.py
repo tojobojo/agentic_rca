@@ -332,10 +332,14 @@ if st.session_state['analysis_results']:
             data["assets"] = updated_assets_list
             
             for _, row in edited_df.iterrows():
+                asset_entry = {
+                    "name": row["identifier"],
+                    "type": row["subtype"]
+                }
                 if row["usage"] == "SOURCE":
-                    sources.append(row["identifier"])
+                    sources.append(asset_entry)
                 elif row["usage"] == "TARGET":
-                    targets.append(row["identifier"])
+                    targets.append(asset_entry)
             
             final_manifest[task_key] = {
                 "sources": sources,
@@ -392,14 +396,15 @@ if st.session_state['analysis_results']:
             else:
                 st.success("✅ All assets validated successfully!")
                 
-                # 4. Save Manifest
-                output_path = "manifest.json"
+            # 5. Save Manifest (Local)
+            output_path = "manifest.json"
+            if validation_error_count == 0:
                 with open(output_path, "w") as f:
                     json.dump(final_manifest, f, indent=2)
                 
                 st.success(f"File saved to `{output_path}`")
                 
-                # 5. Save to Delta Table (if configured)
+                # 6. Save to Delta Table (if configured)
                 if history_table:
                      with st.spinner(f"Saving to history table `{history_table}`..."):
                         save_res = db_service.save_manifest_to_table(
