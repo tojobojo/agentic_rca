@@ -1,74 +1,104 @@
 {
-    "ingest_bronze": {
+    "identify_smb": {
         "sources": [
             {
-                "name": "raw.landing_zone",
+                "name": "default.merchant_source",
                 "type": "TABLE"
             }
         ],
         "targets": [
             {
-                "name": "bronze.sensor_data",
+                "name": "intermediate.smb_list",
                 "type": "TABLE"
             }
         ],
         "code_content": {
-            "ingest_notebook.py": "# Ingest logic\ndf = spark.read.table('raw.landing_zone')\ndf.write.saveAsTable('bronze.sensor_data')"
+            "nb1.py": "# Code"
         }
     },
-    "clean_silver": {
+    "dynamic_sample_size": {
         "sources": [
             {
-                "name": "bronze.sensor_data",
-                "type": "TABLE"
-            },
-            {
-                "name": "ref.lookup_codes",
+                "name": "intermediate.smb_list",
                 "type": "TABLE"
             }
         ],
         "targets": [
             {
-                "name": "silver.sensor_data_clean",
+                "name": "intermediate.sample_size",
                 "type": "TABLE"
             }
         ],
         "code_content": {
-            "clean_notebook.py": "# Cleanup logic\nbronze = spark.table('bronze.sensor_data')\nref = spark.table('ref.lookup_codes')\njoined = bronze.join(ref, 'code')\njoined.write.saveAsTable('silver.sensor_data_clean')"
+            "nb2.py": "# Code"
         }
     },
-    "aggregate_gold": {
+    "proximity_calculation": {
         "sources": [
             {
-                "name": "silver.sensor_data_clean",
+                "name": "intermediate.sample_size",
                 "type": "TABLE"
             }
         ],
         "targets": [
             {
-                "name": "gold.daily_aggregates",
+                "name": "intermediate.proximity",
                 "type": "TABLE"
             }
         ],
         "code_content": {
-            "agg_notebook.py": "# Aggregation logic\ndf = spark.table('silver.sensor_data_clean')\nagg = df.groupBy('date').count()\nagg.write.saveAsTable('gold.daily_aggregates')"
+            "nb3.py": "# Code"
         }
     },
-    "export_report": {
+    "ats_calculation": {
         "sources": [
             {
-                "name": "gold.daily_aggregates",
+                "name": "intermediate.proximity",
                 "type": "TABLE"
             }
         ],
         "targets": [
             {
-                "name": "reporting.tableau_feed",
+                "name": "intermediate.ats_scores",
                 "type": "TABLE"
             }
         ],
         "code_content": {
-            "export_script.py": "# Export logic\ndf = spark.table('gold.daily_aggregates')\ndf.write.saveAsTable('reporting.tableau_feed')"
+            "nb4.py": "# Code"
+        }
+    },
+    "merchant_retention": {
+        "sources": [
+            {
+                "name": "intermediate.ats_scores",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "default.merchant_retention_output",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "retention_logic.py": "# Retention Logic\ndf = spark.read.table('intermediate.ats_scores')\n# Filter logic that might be wrong\nfinal = df.filter(df.total_txn_amt > 500) \nfinal.write.save('default.merchant_retention_output')"
+        }
+    },
+    "all_mcc_segmentation": {
+        "sources": [
+            {
+                "name": "default.merchant_retention_output",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "final.mcc_segments",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "nb6.py": "# Code"
         }
     }
 }

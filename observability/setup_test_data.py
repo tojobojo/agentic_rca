@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType, DoubleType
 import datetime
 import json
 import uuid
@@ -15,47 +15,94 @@ def setup_test_data():
     TEST_JOB_ID = 999999
     TEST_RUN_ID = 1001
     MANIFEST_TABLE = "main.rca_history.manifest_log"  # Update if different in your config
-    SOURCE_TABLE = "default.rca_test_source"
-    TARGET_TABLE = "default.rca_test_target"
+    SOURCE_TABLE = "default.merchant_source"
+    TARGET_TABLE = "default.merchant_retention_output"
     
-    # 3. Create & Populate Source Table (100 Rows)
-    print(f"\nCreating Source Table: {SOURCE_TABLE}")
-    source_data = [(i, f"user_{i}", datetime.datetime.now()) for i in range(100)]
-    schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("user_id", StringType(), True),
-        StructField("created_at", TimestampType(), True)
+    # 3. Create & Populate Source Table (1000 Rows)
+    print(f"\nCreating Merchant Source Table: {SOURCE_TABLE}")
+    
+    # Columns: biz_header_id, merchant_id, mcc_code, zip_code, state_code, state_code, city, latitude, longitude, cbsa_name, OPT_OUT_FLAG, sb_flag_by_sba, CLOVER_FLAG, total_txn_amt, total_txn_cnt, loaddt, naics3
+    source_schema = StructType([
+        StructField("biz_header_id", StringType(), False),
+        StructField("merchant_id", StringType(), False),
+        StructField("mcc_code", StringType(), True),
+        StructField("total_txn_amt", DoubleType(), True),
+        StructField("loaddt", StringType(), True)
     ])
-    df_source = spark.createDataFrame(source_data, schema)
+    
+    # Generate dummy data
+    source_data = []
+    for i in range(100):
+        source_data.append((f"BH_{i}", f"M_{i}", "5411", 100.0 * i, "2024-01-01"))
+        
+    df_source = spark.createDataFrame(source_data, source_schema)
     df_source.write.format("delta").mode("overwrite").saveAsTable(SOURCE_TABLE)
     print(f"✓ Populated {SOURCE_TABLE} with 100 rows.")
 
-    # 4. Create & Populate Target Table (90 Rows - Simulating 10 dropped rows)
+    # 4. Create & Populate Target Table (Simulate drop in 'merchant_retention')
     print(f"\nCreating Target Table: {TARGET_TABLE}")
-    target_data = [(i, f"user_{i}", datetime.datetime.now()) for i in range(90)] # First 90 only
-    df_target = spark.createDataFrame(target_data, schema)
+    target_data = []
+    # Drop 20% rows to simulate anomaly
+    for i in range(80):
+        target_data.append((f"BH_{i}", f"M_{i}", "5411", 100.0 * i, "2024-01-01"))
+        
+    df_target = spark.createDataFrame(target_data, source_schema)
     df_target.write.format("delta").mode("overwrite").saveAsTable(TARGET_TABLE)
-    print(f"✓ Populated {TARGET_TABLE} with 90 rows (simulating drop).")
-
-    # 5. Register Dummy Run (Optional, usually Databricks handles this, but for local test we fake it?)
-    # Actually ObservabilityCollector queries `client.jobs.list_runs`. 
-    # If we are running this locally, we might trick the collector by passing the run object mocked?
-    # Or we just rely on the collector finding "no runs" and doing backfill?
-    # Wait, collector calls `client.jobs.list_runs`. If job 999999 doesn't exist, it fails.
-    # We might need to mock the `ObserverabilityCollector.client` or use an existing real Job ID.
-    # For now, let's just setup the DATA and MANIFEST. 
-    # The user might need to actually create a dummy Job in Databricks UI with ID 999999 or use a real one.
+    print(f"✓ Populated {TARGET_TABLE} with 80 rows (20% Drop).")
     
-    # 6. Push Manifest to Table (Critical for Collector)
-    print(f"\nPushing Manifest for Job {TEST_JOB_ID} to {MANIFEST_TABLE}...")
+    # 4b. Create Intermediate Tables (Pass-through for now)
+    # identify_smb -> intermediate.smb_list
+    # dynamic_sample_size -> intermediate.sample_size
+    # proximity_calculation -> intermediate.proximity
+    # ats_calculation -> intermediate.ats_scores
+    
+    intermediates = [
+        "intermediate.smb_list",
+        "intermediate.sample_size",
+        "intermediate.proximity",
+        "intermediate.ats_scores"
+    ]
+    
+    print("\nCreating Intermediate Tables (100 rows each)...")
+    for tbl in intermediates:
+        df_source.write.format("delta").mode("overwrite").saveAsTable(tbl)
+        print(f"  ✓ {tbl}")
+
+    # 6. Push Manifest
+    print(f"\nPushing Manifest for Job {TEST_JOB_ID}...")
     
     manifest_payload = {
-        "test_step_1": {
-            "sources": [{"name": SOURCE_TABLE, "type": "TABLE"}],
+        "identify_smb": {
+            "sources": [{"name": SOURCE_TABLE, "type": "TABLE"}], 
+            "targets": [{"name": "intermediate.smb_list", "type": "TABLE"}],
+            "code_content": {"nb1.py": "# Code"}
+        },
+        "dynamic_sample_size": {
+            "sources": [{"name": "intermediate.smb_list", "type": "TABLE"}],
+            "targets": [{"name": "intermediate.sample_size", "type": "TABLE"}],
+            "code_content": {"nb2.py": "# Code"}
+        },
+        "proximity_calculation": {
+            "sources": [{"name": "intermediate.sample_size", "type": "TABLE"}],
+            "targets": [{"name": "intermediate.proximity", "type": "TABLE"}],
+            "code_content": {"nb3.py": "# Code"}  
+        },
+        "ats_calculation": {
+            "sources": [{"name": "intermediate.proximity", "type": "TABLE"}],
+            "targets": [{"name": "intermediate.ats_scores", "type": "TABLE"}],
+            "code_content": {"nb4.py": "# Code"}
+        },
+        "merchant_retention": {
+            "sources": [{"name": "intermediate.ats_scores", "type": "TABLE"}], 
             "targets": [{"name": TARGET_TABLE, "type": "TABLE"}],
             "code_content": {
-                "notebook.py": "# Simple Pass through\ndf = spark.read.table('source')\ndf.write.save('target')"
+                "retention_logic.py": "# Retention Logic\ndf = spark.read.table('intermediate.ats_scores')\n# Filter logic that might be wrong\nfinal = df.filter(df.total_txn_amt > 500) \nfinal.write.save('default.merchant_retention_output')"
             }
+        },
+        "all_mcc_segmentation": {
+             "sources": [{"name": TARGET_TABLE, "type": "TABLE"}],
+             "targets": [{"name": "final.mcc_segments", "type": "TABLE"}],
+             "code_content": {"nb6.py": "# Code"}
         }
     }
     

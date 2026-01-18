@@ -27,15 +27,14 @@ def run_mock_rca():
     mock_job_def = {
         "job_id": JOB_ID,
         "settings": {
-            "name": "Test Job",
+            "name": "Merchant Retention Pipeline",
             "tasks": [
-                {
-                    "task_key": "test_step_1",
-                    "notebook_task": {
-                        "notebook_path": "/Workspace/Users/test/test_notebook"
-                    },
-                    "description": "A test step that drops rows."
-                }
+                {"task_key": "identify_smb", "notebook_task": {"notebook_path": "nb1"}},
+                {"task_key": "dynamic_sample_size", "notebook_task": {"notebook_path": "nb2"}, "depends_on": [{"task_key": "identify_smb"}]},
+                {"task_key": "proximity_calculation", "notebook_task": {"notebook_path": "nb3"}, "depends_on": [{"task_key": "dynamic_sample_size"}]},
+                {"task_key": "ats_calculation", "notebook_task": {"notebook_path": "nb4"}, "depends_on": [{"task_key": "proximity_calculation"}]},
+                {"task_key": "merchant_retention", "notebook_task": {"notebook_path": "nb5"}, "depends_on": [{"task_key": "ats_calculation"}]},
+                {"task_key": "all_mcc_segmentation", "notebook_task": {"notebook_path": "nb6"}, "depends_on": [{"task_key": "merchant_retention"}]}
             ]
         }
     }

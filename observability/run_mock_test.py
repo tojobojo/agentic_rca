@@ -29,9 +29,9 @@ def run_mock_test():
     mock_run.start_time = 1700000000000 # Fake Timestamp
     
     # Define tasks for this run (Must match keys in your Manifest!)
-    # In setup_test_data.py, we created "test_step_1"
+    # In setup_test_data.py, we created "merchant_retention"
     mock_task = MagicMock()
-    mock_task.task_key = "test_step_1"
+    mock_task.task_key = "merchant_retention"
     
     # State mocking (SUCCESS result)
     state = MagicMock()
