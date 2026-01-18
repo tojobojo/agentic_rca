@@ -21,7 +21,7 @@ def install_packages(packages: List[str]):
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         print(f"Installed {package}")
 
-install_packages(["gitpython>=3.1.40", "python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
+install_packages(["python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
 
 import argparse
 import os
@@ -32,10 +32,10 @@ from typing import List, Tuple
 
 
 from config.config import get_config
-from collectors.observability_collector import ObservabilityCollector
+
 from core.execution_context import ExecutionContextBuilder, ExecutionContext
 from core.anomaly_engine import AnomalyDetectionEngine, Anomaly
-from agents.rca_agent import RCAAgent
+from ai_agents.rca_agent import RCAAgent
 from utils.telemetry import PerformanceMetrics, PhaseTimer
 import time
 
@@ -54,7 +54,6 @@ import json
 def run_rca_orchestrator(
     job_id: int,
     run_id: int = None,
-    collect_metrics: bool = False,
     output_path: str = "rca_report.md",
     manifest_path: str = None
 ) -> str:
@@ -78,7 +77,7 @@ def run_rca_orchestrator(
     logger.info("=" * 60)
     logger.info(f"Job ID: {job_id}")
     logger.info(f"Run ID: {run_id}")
-    logger.info(f"Collect Metrics: {collect_metrics}")
+    logger.info(f"Run ID: {run_id}")
     logger.info(f"Manifest: {manifest_path}")
     
     # Validate configuration
@@ -97,22 +96,7 @@ def run_rca_orchestrator(
         except Exception as e:
             logger.warning(f"Failed to load manifest: {e}")
 
-    # 1. Observability Collection (Phase 1)
-    if collect_metrics:
-        logger.info("\n[Phase 1] OBSERVABILITY COLLECTION")
-        collector = ObservabilityCollector()
-        metrics = collector.collect_job_metrics(run_id, job_id)
-        
-        # Verify metrics were collected
-        if metrics:
-            logger.info(f"✓ Collected {len(metrics)} metric records")
-        else:
-            logger.warning("⚠ No metrics collected - detection may be incomplete")
-        
-        # Small delay to ensure Delta table commit completes
-        import time
-        time.sleep(2)
-        logger.info("Metrics committed to Delta table")
+
     
     # 2. Initialization
     ctx_builder = ExecutionContextBuilder()
@@ -124,11 +108,12 @@ def run_rca_orchestrator(
     
     # Get tasks from Databricks API via Discovery or SDK
     with PhaseTimer("discovery", metrics):
-        steps = ctx_builder.discovery.discover(job_id, get_config().gitlab_url)
+        # Pass manifest_data for code resolution
+        steps = ctx_builder.discovery.discover(job_id, manifest_data=manifest_data)
         task_keys = [s.task_key for s in steps]
     
     if not task_keys:
-        # Fallback to fetching run tasks if discovery failed (no git connection)
+        # Fallback to fetching run tasks from Databricks API if discovery via Manifest skipped
         try:
             client = ctx_builder.discovery._get_workspace_client()
             run = client.jobs.get_run(run_id)
@@ -240,7 +225,6 @@ def main():
     run_rca_orchestrator(
         job_id=args.job_id,
         run_id=args.run_id,
-        collect_metrics=args.collect,
         manifest_path=args.manifest
     )
 

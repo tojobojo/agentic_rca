@@ -220,6 +220,8 @@ class RCAAgent:
     
     def _build_prompt(self, anomaly: Anomaly, context: ExecutionContext) -> str:
         """Build the investigation prompt for the agent."""
+        
+        # 1. Format Metrics
         metrics_info = f"""
         Metric: {anomaly.metric_name}
         Current Value: {anomaly.current_value:.2f}
@@ -227,6 +229,71 @@ class RCAAgent:
         Z-Score: {anomaly.deviation_z_score:.2f}
         """
         
+        # 2. Format Forensic Evidence (Deep Inspection)
+        forensics = "No deep inspection metrics available."
+        snapshot = context.metrics_snapshot
+        if snapshot:
+            rows_in = snapshot.get("rows_in", 0)
+            rows_out = snapshot.get("rows_out", 0)
+            duration = snapshot.get("duration_ms", 0)
+            
+            # Helper to format nulls/distincts
+            def fmt_cols(metrics_list):
+                if not metrics_list: return "None"
+                # Combine info from all sources/targets
+                combined = []
+                for m in metrics_list:
+                    name = m.get("target_table", "Unknown")
+                    nulls = m.get("rows_null_vital", {})
+                    distincts = m.get("distinct_counts", {})
+                    
+                    # Find interesting stats (non-zero nulls)
+                    issues = []
+                    for col, count in nulls.items():
+                        if count > 0:
+                            issues.append(f"{col}: {count} NULLs")
+                    
+                    combined.append(f"  - {name}: {m.get('rows_total', 0)} rows. Issues: {', '.join(issues) or 'None'}")
+                return "\n".join(combined)
+
+            forensics = f"""
+            **Execution Stats**:
+            - Duration: {duration} ms
+            - Total Input Rows: {rows_in}
+            - Total Output Rows: {rows_out}
+            
+            **Source Details**:
+            {fmt_cols(snapshot.get("metrics_by_type", {}).get("SOURCE", []))}
+            
+            **Target Details**:
+            {fmt_cols(snapshot.get("metrics_by_type", {}).get("TARGET", []))}
+            """
+        
+        # 3. Code Drift Analysis
+        drift_section = ""
+        if context.is_drift_detected and context.manifest_code_snapshot:
+            import difflib
+            # Generate unified diff
+            diff = difflib.unified_diff(
+                context.manifest_code_snapshot.splitlines(),
+                context.code_content.splitlines(),
+                fromfile='Manifest Code',
+                tofile='Executed Code',
+                lineterm=''
+            )
+            diff_text = "\n".join(list(diff))
+            
+            drift_section = f"""
+            > [!WARNING] CODE DRIFT DETECTED
+            > The code executed differs from the version in the lineage manifest.
+            > This change might be the root cause of the anomaly.
+            
+            **Code Changes (Diff)**:
+            ```diff
+            {diff_text}
+            ```
+            """
+            
         prompt = f"""
 Investigate the following anomaly in a Databricks ETL pipeline:
 
@@ -241,13 +308,22 @@ Investigate the following anomaly in a Databricks ETL pipeline:
 {metrics_info}
 **Reason**: {anomaly.reason}
 
-**Step Code**:
+**Forensic Evidence (Deep Inspection)**:
+{forensics}
+
+{drift_section}
+
+**Step Code (Executed)**:
 ```python
 {context.code_content[:3000]}
 ```
 
-Please investigate why this step behaved anomalously and provide your findings.
-Use the available tools (get_table_schema, query_spark_sql, etc.) to verify hypotheses.
+Please investigate why this step behaved anomalously.
+1. **CRITICAL**: Check the Code Drift section above. Did a recent code change cause this?
+2. Analyze the Code Logic vs the Forensic Evidence.
+3. If Source has NULLs in join keys (see Evidence), that is a likely cause.
+4. If Duration is high, check for Cartesian joins or scan issues.
+5. Use tools (query_spark_sql, get_delta_history) ONLY if needed to verify missing details.
 """
         return prompt
     

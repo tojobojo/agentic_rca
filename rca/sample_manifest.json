@@ -1,0 +1,74 @@
+{
+    "ingest_bronze": {
+        "sources": [
+            {
+                "name": "raw.landing_zone",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "bronze.sensor_data",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "ingest_notebook.py": "# Ingest logic\ndf = spark.read.table('raw.landing_zone')\ndf.write.saveAsTable('bronze.sensor_data')"
+        }
+    },
+    "clean_silver": {
+        "sources": [
+            {
+                "name": "bronze.sensor_data",
+                "type": "TABLE"
+            },
+            {
+                "name": "ref.lookup_codes",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "silver.sensor_data_clean",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "clean_notebook.py": "# Cleanup logic\nbronze = spark.table('bronze.sensor_data')\nref = spark.table('ref.lookup_codes')\njoined = bronze.join(ref, 'code')\njoined.write.saveAsTable('silver.sensor_data_clean')"
+        }
+    },
+    "aggregate_gold": {
+        "sources": [
+            {
+                "name": "silver.sensor_data_clean",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "gold.daily_aggregates",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "agg_notebook.py": "# Aggregation logic\ndf = spark.table('silver.sensor_data_clean')\nagg = df.groupBy('date').count()\nagg.write.saveAsTable('gold.daily_aggregates')"
+        }
+    },
+    "export_report": {
+        "sources": [
+            {
+                "name": "gold.daily_aggregates",
+                "type": "TABLE"
+            }
+        ],
+        "targets": [
+            {
+                "name": "reporting.tableau_feed",
+                "type": "TABLE"
+            }
+        ],
+        "code_content": {
+            "export_script.py": "# Export logic\ndf = spark.table('gold.daily_aggregates')\ndf.write.saveAsTable('reporting.tableau_feed')"
+        }
+    }
+}

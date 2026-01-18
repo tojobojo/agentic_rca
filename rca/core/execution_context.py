@@ -8,8 +8,7 @@ from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
 from config.config import get_config, _get_or_create_spark
-from agents.discovery_agent import DiscoveryAgent, StepInfo
-from utils.pipeline_parser import PipelineParser, ParsedStep # Reuse existing logic for now
+from ai_agents.discovery_agent import DiscoveryAgent, StepInfo
 from utils.lineage_client import get_step_tables
 
 logger = logging.getLogger(__name__)
@@ -22,8 +21,8 @@ class ExecutionContext(BaseModel):
     
     # Code Context
     code_content: str
-    git_file_path: str
-    git_commit: str
+    code_content: str
+    code_source_type: str # WORKSPACE, MANIFEST, or N/A
     
     # Logic Context
     logic_type: str
@@ -33,6 +32,11 @@ class ExecutionContext(BaseModel):
     source_tables: List[str]
     target_tables: List[str]
     schemas: Dict[str, str] = Field(default_factory=dict)  # table -> ddl
+    metrics_snapshot: Dict[str, Any] = Field(default_factory=dict) # Rich metrics (Source/Target/Nulls)
+    
+    # Drift Detection
+    is_drift_detected: bool = False
+    manifest_code_snapshot: Optional[str] = None
 
 class ExecutionContextBuilder:
     """
@@ -42,7 +46,6 @@ class ExecutionContextBuilder:
     def __init__(self):
         self.config = get_config()
         self.discovery = DiscoveryAgent()
-        self.parser = PipelineParser()
         self._schema_cache: Dict[str, str] = {}  # Cache schemas to avoid repeated queries
     
     def _fetch_schemas(self, tables: List[str]) -> Dict[str, str]:
@@ -89,15 +92,9 @@ class ExecutionContextBuilder:
         """
         logger.info(f"Building context for Job {job_id}, Run {run_id}, Step {step_id}")
         
-        # 1. Discover Code (Git)
-        # We assume the repo is already cloned or we clone it now.
-        # Ideally, we should pass the gitlab_url from config or job settings.
-        gitlab_url = self.config.gitlab_url
-        if not gitlab_url:
-             logger.warning("No GitLab URL configured. Code discovery might fail.")
-        
-        # This calls clone internally if needed
-        steps = self.discovery.discover(job_id, gitlab_url or "")
+        # 1. Discover Code (Manifest)
+        # We no longer clone Git. We use the Manifest mapping.
+        steps = self.discovery.discover(job_id, manifest_data=manifest_data)
         
         # Find the specific step
         target_step: Optional[StepInfo] = None
@@ -117,12 +114,12 @@ class ExecutionContextBuilder:
         source_tables = tables.get("sources", [])
         target_tables = tables.get("targets", [])
         
-        # 3. Parse Logic (Intent)
-        parsed: ParsedStep = self.parser.parse_step(
-            target_step, 
-            source_tables=source_tables, 
-            target_tables=target_tables
-        )
+        # 3. Parse Logic (Simplified)
+        # We no longer rely on complex Regex parsing here. 
+        # The LLM will analyze the code content directly.
+        logic_type = "GENERIC"
+        logic_summary = "Logic analysis deferred to LLM"
+        
         # 4. Fetch Schemas (Metadata)
         all_tables = list(set(source_tables + target_tables))  # Unique tables
         schemas = self._fetch_schemas(all_tables) if all_tables else {}
@@ -132,13 +129,13 @@ class ExecutionContextBuilder:
             job_id=str(job_id),
             step_id=step_id,
             code_content=target_step.code_content or "",
-            git_file_path=target_step.git_file_path or "",
-            git_commit="HEAD", # TODO: Get actual commit
-            logic_type=parsed.logic_type,
-            logic_summary=parsed.logic_summary,
+            code_source_type=target_step.code_source_type or "N/A", 
+            logic_type=logic_type,
+            logic_summary=logic_summary,
             source_tables=source_tables,
             target_tables=target_tables,
-            schemas=schemas
+            schemas=schemas,
+            is_drift_detected=target_step.is_drift_detected,
+            manifest_code_snapshot=target_step.manifest_code_snapshot
         )
-
 

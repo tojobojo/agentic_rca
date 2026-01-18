@@ -344,7 +344,8 @@ if st.session_state['analysis_results']:
             final_manifest[task_key] = {
                 "sources": sources,
                 "targets": targets,
-                "source_files": data.get("source_files", [])
+                "source_files": data.get("source_files", []),
+                "code_content": data.get("source_code_snapshot", {}) # Persist Code!
             }
 
     # --- Validate & Save Button (Global) ---

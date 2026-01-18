@@ -27,6 +27,7 @@ class HybridResult(BaseModel):
     ignored_files: List[str] = Field(default=[], description="List of files ignored by Context Pruner")
     # Added source_files to track what was analyzed (Source of Truth for Manifest)
     source_files: List[str] = Field(default=[], description="List of files that were actually analyzed")
+    source_code_snapshot: Dict[str, str] = Field(default={}, description="Snapshot of the analyzed code content")
     token_stats: Dict[str, int] = Field(default={}, description="Token usage statistics (requests, input, output, total)")
 
 class FilterResult(BaseModel):
@@ -262,7 +263,9 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
             resolution_trace=resolution_trace,
             ignored_files=ignored_files,
+            ignored_files=ignored_files,
             source_files=relevant_files, # Capture Source Files
+            source_code_snapshot={f: code_context[f] for f in relevant_files if f in code_context}, # Capture Content
             token_stats=token_usage
         )
 

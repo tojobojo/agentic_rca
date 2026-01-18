@@ -3,8 +3,7 @@
 # OpenAI Agents SDK (Experimental)
 openai-agents>=0.6.5
 
-# Git Operations
-gitpython>=3.1.41
+
 
 # HTTP Client
 httpx>=0.27.0
