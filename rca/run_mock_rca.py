@@ -18,7 +18,8 @@ def run_mock_rca():
     
     JOB_ID = 999999
     RUN_ID = 1001
-    MANIFEST_PATH = "rca/sample_manifest.json" # Use the one we updated
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    MANIFEST_PATH = os.path.join(base_dir, "sample_manifest.json")
     
     # 1. Mock Discovery Agent methods
     # We want to intercept 'fetch_job_definition' to return a fake job structure
@@ -56,7 +57,7 @@ def run_mock_rca():
                         job_id=JOB_ID,
                         run_id=RUN_ID,
                         manifest_path=MANIFEST_PATH,
-                        output_path="rca/test_report.md"
+                        output_path=os.path.join(base_dir, "test_report.md")
                     )
                     
                     print("\n✅ RCA Execution Complete!")

@@ -111,8 +111,23 @@ class ExecutionContextBuilder:
         # Pass manifest_data as fallback
         table_map = get_step_tables(job_id, [step_id], fallback_to_manifest=manifest_data)
         tables = table_map.get(step_id, {})
-        source_tables = tables.get("sources", [])
-        target_tables = tables.get("targets", [])
+        
+        raw_sources = tables.get("sources", [])
+        raw_targets = tables.get("targets", [])
+        
+        # Helper to extract table name if dict
+        def extract_names(items):
+            names = []
+            for item in items:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    if name: names.append(name)
+                elif isinstance(item, str):
+                    names.append(item)
+            return names
+
+        source_tables = extract_names(raw_sources)
+        target_tables = extract_names(raw_targets)
         
         # 3. Parse Logic (Simplified)
         # We no longer rely on complex Regex parsing here. 
