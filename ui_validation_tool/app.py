@@ -68,10 +68,10 @@ with st.sidebar:
     st.markdown("### ⚙️ Job Parameters")
     job_params_input = st.text_area("JSON Parameters", value='{"env": "prod"}', height=100)
 
-    st.markdown("### 💾 History Config")
+    st.markdown("### 💾 Manifest Config")
     # Read from Config (Env Var)
-    history_table = config.history_table
-    st.text_input("History Table (Read-only)", value=history_table, disabled=True, help="Target Delta table (set via HISTORY_TABLE env var)")
+    manifest_table = config.manifest_table
+    st.text_input("Manifest Table (Read-only)", value=manifest_table, disabled=True, help="Target Delta table (set via RCA_MANIFEST_TABLE env var)")
     manifest_version_input = st.text_input("Manifest Version", value="1.0", help="Version tag for this run")
     
     st.markdown("---")
@@ -406,10 +406,10 @@ if st.session_state['analysis_results']:
                 st.success(f"File saved to `{output_path}`")
                 
                 # 6. Save to Delta Table (if configured)
-                if history_table:
-                     with st.spinner(f"Saving to history table `{history_table}`..."):
+                if manifest_table:
+                     with st.spinner(f"Saving to manifest table `{manifest_table}`..."):
                         save_res = db_service.save_manifest_to_table(
-                             table_name=history_table,
+                             table_name=manifest_table,
                              manifest=final_manifest,
                              job_id=job_id_input if job_id_input else "unknown",
                              version=manifest_version_input

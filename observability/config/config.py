@@ -36,62 +36,75 @@ def get_dbutils(spark):
 
 def get_runtime_args():
     """
-    Hybrid argument parser for Databricks.
-    Supports both Jobs (CLI args) and Interactive (Widgets).
+    Unified argument parser for Databricks Jobs (CLI) and Interactive (Widgets).
+    Prioritizes CLI arguments > Widgets > Defaults.
     """
-    # 1. Try parsing CLI args first (if standard flags are present)
-    # We check for --job-id specifically to distinguish from default kernel args
-    if any("--job-id" in arg for arg in sys.argv):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--job-id", type=int, required=True)
-        parser.add_argument("--run-id", type=int, required=False)
-        parser.add_argument("--collect", action="store_true")
-        parser.add_argument("--manifest", type=str, required=False)
-        
-        # Only parse known args to avoid conflict with Databricks internal args
-        args, _ = parser.parse_known_args()
-        return args
-
-    # 2. Fallback to Widgets (Interactive Mode)
+    # 1. Setup Argparse (Values are optional strings to allow widget fallback)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--job-id", type=str, required=False)
+    parser.add_argument("--run-id", type=str, required=False)
+    parser.add_argument("--manifest", type=str, required=False)
+    parser.add_argument("--collect", action="store_true", help="Flag to specific collection mode")
+    
+    # Parse known args to suppress errors from internal Databricks flags
+    cli_args, _ = parser.parse_known_args()
+    
+    # 2. Setup Widgets (Interactive fallback)
     spark = _get_or_create_spark()
     dbutils = get_dbutils(spark)
     
+    # In interactive mode (or standard Databricks jobs), dbutils is usually available.
+    # We initialize widgets just in case we are in interactive mode.
     if dbutils:
-        # Define widgets so they appear in UI
         try:
             dbutils.widgets.text("job_id", "", "1. Job ID (Required)")
             dbutils.widgets.text("run_id", "", "2. Run ID (Optional)")
             dbutils.widgets.dropdown("collect", "false", ["true", "false"], "3. Collect Metrics?")
             dbutils.widgets.text("manifest", "", "4. Manifest Path (Optional)")
-        except: pass # Widgets might already exist
-        
-        # Parse values
-        class Args:
-            pass
-        args = Args()
-        
-        j_id = dbutils.widgets.get("job_id")
-        r_id = dbutils.widgets.get("run_id")
-        coll = dbutils.widgets.get("collect")
-        mani = dbutils.widgets.get("manifest")
-        
-        args.job_id = int(j_id) if j_id.strip() else None
-        args.run_id = int(r_id) if r_id.strip() else None
-        args.collect = (coll.lower() == "true")
-        args.manifest = mani if mani.strip() else None
-        
-        if not args.job_id:
-            logger.warning("No Job ID provided via widgets.")
-            
-        return args
+        except: pass
     
-    # 3. Local fallback (Empty)
-    class EmptyArgs:
+    class Args:
         job_id = None
         run_id = None
-        collect = False
         manifest = None
-    return EmptyArgs()
+        collect = False
+        
+    final_args = Args()
+    
+    # 3. Resolution Strategy (CLI > Widget)
+    
+    # Job ID
+    if cli_args.job_id:
+        final_args.job_id = int(cli_args.job_id)
+    elif dbutils:
+        val = dbutils.widgets.get("job_id")
+        final_args.job_id = int(val) if val and val.strip() else None
+        
+    # Run ID
+    if cli_args.run_id:
+        final_args.run_id = int(cli_args.run_id)
+    elif dbutils:
+        val = dbutils.widgets.get("run_id")
+        final_args.run_id = int(val) if val and val.strip() else None
+        
+    # Manifest
+    if cli_args.manifest:
+        final_args.manifest = cli_args.manifest
+    elif dbutils:
+        val = dbutils.widgets.get("manifest")
+        final_args.manifest = val if val and val.strip() else None
+        
+    # Collect
+    if cli_args.collect:
+        final_args.collect = True
+    elif dbutils:
+        val = dbutils.widgets.get("collect")
+        final_args.collect = (val.lower() == "true") if val else False
+        
+    if not final_args.job_id:
+        logger.warning("No Job ID provided via CLI (--job-id) or Widgets.")
+
+    return final_args
 
 class Config(BaseModel):
     """Configuration settings for the RCA system."""
@@ -103,12 +116,10 @@ class Config(BaseModel):
     databricks_token: str = ""
     
     # Manifest Table (Source of Truth for Lineage)
-    manifest_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"
-    
-
+    manifest_table: str = "rca_manifest_log"
     
     # History Table
-    metrics_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"
+    metrics_table: str = "rca_metrics_history"
     
     # Temp Directory for Git Clone (cross-platform)
     temp_dir: str = Field(default_factory=lambda: os.path.join(tempfile.gettempdir(), "rca_git_cache"))
@@ -160,9 +171,9 @@ class Config(BaseModel):
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
 
-            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"),
+            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "rca_manifest_log"),
 
-            metrics_table=os.getenv("RCA_METRICS_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"),
+            metrics_table=os.getenv("RCA_METRICS_TABLE", "rca_metrics_history"),
             temp_dir=os.getenv("RCA_TEMP_DIR", os.path.join(tempfile.gettempdir(), "rca_git_cache")),
             anomaly_z_score_threshold=float(os.getenv("RCA_ANOMALY_Z_SCORE", "3.0")),
             anomaly_drop_rate_threshold=float(os.getenv("RCA_ANOMALY_DROP_RATE", "0.1")),

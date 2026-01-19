@@ -51,7 +51,7 @@ class UIConfig(BaseModel):
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
     # Feature Flags / Extras
-    history_table: str = os.getenv("HISTORY_TABLE", "main.rca_history.manifest_log")
+    manifest_table: str = os.getenv("RCA_MANIFEST_TABLE", "rca_manifest_log")
 
     def validate(self):
         errors = []

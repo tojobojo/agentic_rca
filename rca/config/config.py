@@ -118,7 +118,7 @@ class Config(BaseModel):
     databricks_token: str = ""
     
     # Manifest Table (Source of Truth for Lineage)
-    manifest_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"
+    manifest_table: str = "rca_manifest_log"
     
     # OpenAI / Model Settings
     llm_model: str = "databricks/databricks-gpt-oss-20b" # Default to Databricks model
@@ -126,7 +126,7 @@ class Config(BaseModel):
     model: Optional[Any] = None # Holds the LitellmModel instance
 
     # History Table
-    metrics_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"
+    metrics_table: str = "rca_metrics_history"
     
     # Anomaly Detection Thresholds
     anomaly_z_score_threshold: float = Field(default=3.0, gt=0)
@@ -177,9 +177,9 @@ class Config(BaseModel):
         return cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
-            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"),
+            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "rca_manifest_log"),
             llm_model=os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b"),
-            metrics_table=os.getenv("RCA_METRICS_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"),
+            metrics_table=os.getenv("RCA_METRICS_TABLE", "rca_metrics_history"),
             anomaly_z_score_threshold=float(os.getenv("RCA_ANOMALY_Z_SCORE", "3.0")),
             anomaly_drop_rate_threshold=float(os.getenv("RCA_ANOMALY_DROP_RATE", "0.1")),
             anomaly_rejection_rate_threshold=float(os.getenv("RCA_ANOMALY_REJECTION_RATE", "0.05")),
