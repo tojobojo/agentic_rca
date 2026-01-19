@@ -41,6 +41,7 @@ class MetricRecord(BaseModel):
     rows_total: int = Field(ge=0, default=0)
     rows_null_vital: Dict[str, int] = Field(default_factory=dict)
     distinct_counts: Dict[str, int] = Field(default_factory=dict)
+    columns: List[str] = Field(default_factory=list) # Schema Snapshot
     
     # Metadata
     timestamp: str
@@ -211,6 +212,7 @@ class ObservabilityCollector:
                             rows_total=row_count,
                             rows_null_vital=null_map,
                             distinct_counts=distinct_map,
+                            columns=cached_stats[4] if len(cached_stats) > 4 else [],
                             timestamp=str(datetime.now()),
                             collection_status=status
                         )
@@ -233,7 +235,7 @@ class ObservabilityCollector:
                             table_conf=table_conf
                         )
                         # Cache the data part
-                        stats_cache[cache_key] = (metric.rows_total, metric.rows_null_vital, metric.distinct_counts, metric.collection_status)
+                        stats_cache[cache_key] = (metric.rows_total, metric.rows_null_vital, metric.distinct_counts, metric.collection_status, metric.columns)
                         
                     metrics.append(metric)
         
@@ -305,6 +307,8 @@ class ObservabilityCollector:
                 agg_exprs = [F.count("*").alias("total_rows")]
                 
                 all_cols = df.columns
+                # Sort columns for consistent schema hashing if needed
+                all_cols.sort()
                 
                 # Heuristic: Only check distincts for likely categorical columns (String/Integer) 
                 # to avoid exploding performance on high-cardinality IDs or timestamps.
@@ -358,6 +362,7 @@ class ObservabilityCollector:
             rows_total=row_count,
             rows_null_vital=null_map,
             distinct_counts=distinct_map,
+            columns=all_cols if status == "SUCCESS" else [],
             timestamp=str(datetime.now()),
             collection_status=status
         )

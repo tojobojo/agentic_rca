@@ -57,15 +57,15 @@ def run_mock_test():
     # 3. Run Sync
     # This will:
     #   a. Call list_runs (Mocked -> Returns run 1001)
-    #   b. Fetch Manifest (Real -> Reads from 'main.rca_history.manifest_log')
-    #   c. Process 'test_step_1' -> Reads 'default.rca_test_source' & 'default.rca_test_target'
-    #   d. Save Metrics -> Writes to 'rca_catalog.default.metrics_history'
+    #   b. Fetch Manifest (Real -> Reads from 'dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log')
+    #   c. Process 'test_step_1' -> Reads 'dev_dcs_catalog.dev_peergroup_benchmark.rca_merchant_source' ...
+    #   d. Save Metrics -> Writes to 'dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history'
     
     print("--> Triggering sync_metrics(999999)...")
     try:
         collector.sync_metrics(job_id=999999)
         print("\n✅ Test Complete!")
-        print("Check table 'rca_catalog.default.metrics_history' to see the collected metrics.")
+        print("Check table 'dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history' to see the collected metrics.")
         
     except Exception as e:
         print(f"\n❌ Test Failed: {e}")

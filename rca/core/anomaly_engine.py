@@ -111,6 +111,21 @@ class AnomalyDetectionEngine:
         if dur_anomaly:
             anomalies.append(dur_anomaly)
             
+        # 6. Check for Volume Anomaly
+        vol_anomaly = self._check_volume_anomaly(latest, baseline)
+        if vol_anomaly:
+            anomalies.append(vol_anomaly)
+            
+        # 7. Check for Freshness/SLA Anomaly
+        fresh_anomaly = self._check_freshness_anomaly(latest, baseline)
+        if fresh_anomaly:
+            anomalies.append(fresh_anomaly)
+            
+        # 8. Check for Schema Drift
+        schema_anomaly = self._check_schema_drift(latest, baseline)
+        if schema_anomaly:
+            anomalies.append(schema_anomaly)
+            
         return anomalies
 
     def _consolidate_run_metrics(self, history: List[Dict]) -> List[Dict]:
@@ -138,7 +153,8 @@ class AnomalyDetectionEngine:
                     "rows_out": 0,
                     "duration_ms": 0,
                     "metrics_by_type": {"SOURCE": [], "TARGET": []},
-                    "timestamp": row.get("timestamp")
+                    "timestamp": row.get("timestamp"),
+                    "columns": row.get("columns", [])
                 }
             
             m_type = row.get("metric_type", "TARGET") # Default to Target if missing (old logs)
@@ -337,4 +353,132 @@ class AnomalyDetectionEngine:
                     severity="high",
                     reason=f"High data quality rejection: {rejected} rows ({rate:.1%})"
                 )
+        return None
+
+    def _check_volume_anomaly(self, latest: Dict, baseline: List[Dict]) -> Optional[Anomaly]:
+        """Check if rows_in dropped significantly compared to history."""
+        curr_in = latest.get("rows_in", 0)
+        
+        hist_volumes = [r.get("rows_in", 0) for r in baseline]
+        if not hist_volumes: return None
+        
+        avg = statistics.mean(hist_volumes)
+        if avg == 0: return None
+        
+        # Calculate drop pct: (Avg - Curr) / Avg
+        # Positive means drop. Negative max be a spike (which we might ignore or flag separately)
+        drop_pct = (avg - curr_in) / avg
+        
+        threshold = self.config.anomaly_volume_drop_threshold
+        
+        if drop_pct > threshold:
+             return Anomaly(
+                run_id=latest["run_id"],
+                step_id=latest["step_id"],
+                metric_name="volume_drop",
+                current_value=float(curr_in),
+                historical_avg=avg,
+                deviation_z_score=0.0, # Could calc Z-score if needed
+                severity="high",
+                reason=f"Significant Volume Drop: {curr_in} rows (Avg: {avg:.0f}, -{drop_pct:.1%})"
+            )
+        return None
+
+    def _check_freshness_anomaly(self, latest: Dict, baseline: List[Dict]) -> Optional[Anomaly]:
+        """Check if start time is significantly delayed."""
+        from datetime import datetime
+        
+        # Helper to parse timestamp
+        def get_hour_of_day(ts_str):
+            try:
+                # Format: 2026-01-20 00:39:12.123456
+                dt = datetime.strptime(str(ts_str).split('.')[0], "%Y-%m-%d %H:%M:%S")
+                return dt.hour + (dt.minute / 60.0)
+            except:
+                return None
+
+        curr_ts = latest.get("timestamp")
+        curr_hour = get_hour_of_day(curr_ts)
+        if curr_hour is None: return None
+        
+        hist_hours = []
+        for r in baseline:
+            h = get_hour_of_day(r.get("timestamp"))
+            if h is not None: hist_hours.append(h)
+            
+        if not hist_hours: return None
+        
+        avg_hour = statistics.mean(hist_hours)
+        
+        # Handle day wrap-around edge case simply for now (ignoring it, assuming daily regular runs)
+        # If avg is 23 (11pm) and curr is 1 (1am), diff is -22. Should be +2.
+        # Simple Logic: If delay > threshold hours
+        
+        diff = curr_hour - avg_hour
+        
+        threshold = self.config.anomaly_freshness_delay_hours
+        
+        if diff > threshold:
+             return Anomaly(
+                run_id=latest["run_id"],
+                step_id=latest["step_id"],
+                metric_name="start_delay_hours",
+                current_value=curr_hour,
+                historical_avg=avg_hour,
+                deviation_z_score=0.0,
+                severity="medium",
+                reason=f"Start Time Delayed by {diff:.1f} hours (Avg Hour: {avg_hour:.1f}, Curr: {curr_hour:.1f})"
+            )
+        return None
+
+    def _check_schema_drift(self, latest: Dict, baseline: List[Dict]) -> Optional[Anomaly]:
+        """Check if columns changed compared to last run."""
+        # We only check vs the VERY LAST run (baseline[0]), not average
+        if not baseline: return None
+        
+        last_run = baseline[0]
+        
+        # Columns might be in 'columns' field (if we updated collector) or we infer.
+        # Collector update ensured 'columns' is in MetricRecord.
+        
+        # We need to extract columns from the TARGET metrics inside the run
+        # Implementation Detail: _consolidate_run_metrics puts 'columns' at run level? 
+        # No, we added it to run dict from 'row.get("columns")'.
+        # Since a run has multiple metric rows (Source/Target), which one?
+        # Usually TARGET has the interesting schema.
+        
+        def get_target_cols(run_data):
+            targets = run_data["metrics_by_type"].get("TARGET", [])
+            if not targets: return set()
+            # If multiple targets, union them? Or just take first? 
+            # Let's union all target schemas
+            cols = set()
+            for t in targets:
+                c_list = t.get("columns", [])
+                if c_list: cols.update(c_list)
+            return cols
+
+        curr_cols = get_target_cols(latest)
+        last_cols = get_target_cols(last_run)
+        
+        if not curr_cols or not last_cols: return None
+        
+        if curr_cols != last_cols:
+            missing = last_cols - curr_cols
+            new = curr_cols - last_cols
+            
+            msg = "Schema Drift Detected."
+            if missing: msg += f" Missing: {list(missing)}."
+            if new: msg += f" New: {list(new)}."
+            
+            return Anomaly(
+                run_id=latest["run_id"],
+                step_id=latest["step_id"],
+                metric_name="schema_drift",
+                current_value=len(curr_cols),
+                historical_avg=len(last_cols),
+                deviation_z_score=0.0,
+                severity="high",
+                reason=msg
+            )
         return None

@@ -10,6 +10,18 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from dotenv import load_dotenv
 import sys
 import argparse
+from typing import Optional, Any
+
+# fixing asyncio logs from litellm
+os.environ["LITELLM_LOGGING"] = "False"
+os.environ["LITELLM_DISABLE_LOGGING"] = "True"
+os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
+
+try:
+    from agents.extensions.models.litellm_model import LitellmModel
+except ImportError:
+    LitellmModel = None
+
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -36,57 +48,65 @@ def get_dbutils(spark):
 
 def get_runtime_args():
     """
-    Hybrid argument parser for Databricks.
-    Supports both Jobs (CLI args) and Interactive (Widgets).
+    Unified argument parser for Databricks Jobs (CLI) and Interactive (Widgets).
+    Prioritizes CLI arguments > Widgets > Defaults.
     """
-    # 1. Try parsing CLI args first (if standard flags are present)
-    # We check for --job-id specifically to distinguish from default kernel args
-    if any("--job-id" in arg for arg in sys.argv):
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--job-id", type=int, required=True)
-        parser.add_argument("--run-id", type=int, required=False)
-        parser.add_argument("--manifest", type=str, required=False)
-        
-        # Only parse known args to avoid conflict with Databricks internal args
-        args, _ = parser.parse_known_args()
-        return args
-
-    # 2. Fallback to Widgets (Interactive Mode)
+    # 1. Setup Argparse (Values are optional strings to allow widget fallback)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--job-id", type=str, required=False)
+    parser.add_argument("--run-id", type=str, required=False)
+    parser.add_argument("--manifest", type=str, required=False)
+    
+    # Parse known args to suppress errors from internal Databricks flags
+    cli_args, _ = parser.parse_known_args()
+    
+    # 2. Setup Widgets (Interactive fallback)
     spark = _get_or_create_spark()
     dbutils = get_dbutils(spark)
     
+    # In interactive mode (or standard Databricks jobs), dbutils is usually available.
+    # We initialize widgets just in case we are in interactive mode.
     if dbutils:
-        # Define widgets so they appear in UI
         try:
             dbutils.widgets.text("job_id", "", "1. Job ID (Required)")
             dbutils.widgets.text("run_id", "", "2. Run ID (Optional)")
             dbutils.widgets.text("manifest", "", "4. Manifest Path (Optional)")
-        except: pass # Widgets might already exist
-        
-        # Parse values
-        class Args:
-            pass
-        args = Args()
-        
-        j_id = dbutils.widgets.get("job_id")
-        r_id = dbutils.widgets.get("run_id")
-        args.job_id = int(j_id) if j_id.strip() else None
-        args.run_id = int(r_id) if r_id.strip() else None
-        
-        mani = dbutils.widgets.get("manifest")
-        args.manifest = mani if mani.strip() else None
-        
-        if not args.job_id:
-            logger.warning("No Job ID provided via widgets.")
-            
-        return args
+        except: pass
     
-    # 3. Local fallback (Empty)
-    class EmptyArgs:
+    class Args:
         job_id = None
         run_id = None
         manifest = None
-    return EmptyArgs()
+        
+    final_args = Args()
+    
+    # 3. Resolution Strategy (CLI > Widget)
+    
+    # Job ID
+    if cli_args.job_id:
+        final_args.job_id = int(cli_args.job_id)
+    elif dbutils:
+        val = dbutils.widgets.get("job_id")
+        final_args.job_id = int(val) if val and val.strip() else None
+        
+    # Run ID
+    if cli_args.run_id:
+        final_args.run_id = int(cli_args.run_id)
+    elif dbutils:
+        val = dbutils.widgets.get("run_id")
+        final_args.run_id = int(val) if val and val.strip() else None
+        
+    # Manifest
+    if cli_args.manifest:
+        final_args.manifest = cli_args.manifest
+    elif dbutils:
+        val = dbutils.widgets.get("manifest")
+        final_args.manifest = val if val and val.strip() else None
+        
+    if not final_args.job_id:
+        logger.warning("No Job ID provided via CLI (--job-id) or Widgets.")
+
+    return final_args
 
 class Config(BaseModel):
     """Configuration settings for the RCA system."""
@@ -100,11 +120,11 @@ class Config(BaseModel):
     # Manifest Table (Source of Truth for Lineage)
     manifest_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"
     
-    # OpenAI Settings
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+    # OpenAI / Model Settings
+    llm_model: str = "databricks/databricks-gpt-oss-20b" # Default to Databricks model
     
-    # History Table
+    model: Optional[Any] = None # Holds the LitellmModel instance
+
     # History Table
     metrics_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"
     
@@ -112,6 +132,10 @@ class Config(BaseModel):
     anomaly_z_score_threshold: float = Field(default=3.0, gt=0)
     anomaly_drop_rate_threshold: float = Field(default=0.1, ge=0, le=1)
     anomaly_rejection_rate_threshold: float = Field(default=0.05, ge=0, le=1)
+    
+    # New Thresholds for Advanced Detection
+    anomaly_volume_drop_threshold: float = Field(default=0.3, description="Absolute input volume drop to flag (e.g. 0.3 = 30% drop)")
+    anomaly_freshness_delay_hours: float = Field(default=2.0, description="Hours of delay in start time to flag as anomaly")
     
     # File Processing Limits
     max_file_size_mb: int = Field(default=1, gt=0)
@@ -133,26 +157,19 @@ class Config(BaseModel):
         errors = []
         if not self.databricks_host:
             errors.append(
-                "DATABRICKS_HOST is required. Set via environment variable or Databricks secret. "
-                "Example: https://adb-1234567890123456.7.azuredatabricks.net"
+                "DATABRICKS_HOST is required. Set via environment variable or Databricks secret."
             )
         if not self.databricks_token:
             errors.append(
                 "DATABRICKS_TOKEN is required. Generate at: <workspace_url>/settings/tokens"
             )
-        if not self.openai_api_key:
-            errors.append(
-                "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
-            )
-        if not self.openai_api_key:
-            errors.append(
-                "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
-            )
+        if not self.databricks_token:
+             errors.append("DATABRICKS_TOKEN is required for model access.")
         return errors
     
     def __repr__(self):
         """Safe representation that masks secrets."""
-        return f"Config(host={self.databricks_host}, model={self.openai_model})"
+        return f"Config(host={self.databricks_host}, model={self.llm_model})"
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -160,18 +177,31 @@ class Config(BaseModel):
         return cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
-            databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
             manifest_table=os.getenv("RCA_MANIFEST_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"),
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+            llm_model=os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b"),
             metrics_table=os.getenv("RCA_METRICS_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"),
             anomaly_z_score_threshold=float(os.getenv("RCA_ANOMALY_Z_SCORE", "3.0")),
             anomaly_drop_rate_threshold=float(os.getenv("RCA_ANOMALY_DROP_RATE", "0.1")),
             anomaly_rejection_rate_threshold=float(os.getenv("RCA_ANOMALY_REJECTION_RATE", "0.05")),
+            anomaly_volume_drop_threshold=float(os.getenv("RCA_ANOMALY_VOLUME_DROP", "0.3")),
+            anomaly_freshness_delay_hours=float(os.getenv("RCA_ANOMALY_FRESHNESS_DELAY", "2.0")),
             max_file_size_mb=int(os.getenv("RCA_MAX_FILE_SIZE_MB", "1")),
             llm_max_retries=int(os.getenv("RCA_LLM_MAX_RETRIES", "3")),
             llm_retry_delay_seconds=int(os.getenv("RCA_LLM_RETRY_DELAY", "2")),
         )
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Initialize LitellmModel if available and not already set
+        if LitellmModel and not self.model:
+            # Use databricks_token as api_key for Databricks models
+            try:
+                self.model = LitellmModel(
+                    model=self.llm_model,
+                    api_key=self.databricks_token
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize LitellmModel: {e}")
 
     @classmethod
     def from_databricks_secrets(cls, scope: str = "rca-secrets") -> "Config":
@@ -195,9 +225,7 @@ class Config(BaseModel):
                 return cls(
                     databricks_host=spark.conf.get("spark.databricks.workspaceUrl", ""),
                     databricks_token=dbutils.secrets.get(scope, "databricks_token"),
-                    databricks_token=dbutils.secrets.get(scope, "databricks_token"),
-                    databricks_token=dbutils.secrets.get(scope, "databricks_token"),
-                    openai_api_key=dbutils.secrets.get(scope, "openai_api_key"),
+                    # Removing explicit openai_api_key retrieval from secrets to match UI tool
                 )
         except Exception as e:
             logger.warning(f"Could not load from Databricks secrets: {e}")

@@ -208,7 +208,7 @@ class RCAAgent:
         # Define the agent
         self.agent = Agent(
             name="RCADetective",
-            model=self.config.openai_model,
+            model=self.config.model if self.config.model else self.config.llm_model,
             instructions=RCA_DETECTIVE_INSTRUCTIONS,
             tools=[
                 get_table_schema,
