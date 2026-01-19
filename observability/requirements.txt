@@ -1,7 +1,6 @@
 # Production Dependencies for Agentic RCA System
 
-# OpenAI Agents SDK (Experimental)
-openai-agents>=0.6.5
+
 
 
 

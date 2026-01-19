@@ -16,7 +16,7 @@ def install_packages(packages: List[str]):
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         print(f"Installed {package}")
 
-install_packages(["python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
+install_packages(["python-dotenv>=1.0.0", "pydantic>=2.5.2", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
 
 
 import argparse

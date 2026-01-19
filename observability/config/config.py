@@ -103,14 +103,12 @@ class Config(BaseModel):
     databricks_token: str = ""
     
     # Manifest Table (Source of Truth for Lineage)
-    manifest_table: str = "main.rca_history.manifest_log"
+    manifest_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"
     
-    # OpenAI Settings
-    openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+
     
     # History Table
-    metrics_table: str = "rca_catalog.default.metrics_history"
+    metrics_table: str = "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"
     
     # Temp Directory for Git Clone (cross-platform)
     temp_dir: str = Field(default_factory=lambda: os.path.join(tempfile.gettempdir(), "rca_git_cache"))
@@ -147,19 +145,13 @@ class Config(BaseModel):
             errors.append(
                 "DATABRICKS_TOKEN is required. Generate at: <workspace_url>/settings/tokens"
             )
-        if not self.openai_api_key:
-            errors.append(
-                "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
-            )
-        if not self.openai_api_key:
-            errors.append(
-                "OPENAI_API_KEY is required. Get your API key from: https://platform.openai.com/api-keys"
-            )
+
+
         return errors
     
     def __repr__(self):
         """Safe representation that masks secrets."""
-        return f"Config(host={self.databricks_host}, model={self.openai_model})"
+        return f"Config(host={self.databricks_host})"
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -167,11 +159,10 @@ class Config(BaseModel):
         return cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
-            databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
-            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "main.rca_history.manifest_log"),
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            metrics_table=os.getenv("RCA_METRICS_TABLE", "rca_catalog.default.metrics_history"),
+
+            manifest_table=os.getenv("RCA_MANIFEST_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"),
+
+            metrics_table=os.getenv("RCA_METRICS_TABLE", "dev_dcs_catalog.dev_peergroup_benchmark.rca_metrics_history"),
             temp_dir=os.getenv("RCA_TEMP_DIR", os.path.join(tempfile.gettempdir(), "rca_git_cache")),
             anomaly_z_score_threshold=float(os.getenv("RCA_ANOMALY_Z_SCORE", "3.0")),
             anomaly_drop_rate_threshold=float(os.getenv("RCA_ANOMALY_DROP_RATE", "0.1")),
@@ -203,9 +194,9 @@ class Config(BaseModel):
                 return cls(
                     databricks_host=spark.conf.get("spark.databricks.workspaceUrl", ""),
                     databricks_token=dbutils.secrets.get(scope, "databricks_token"),
-                    databricks_token=dbutils.secrets.get(scope, "databricks_token"),
+
                     # gitlab removed
-                    openai_api_key=dbutils.secrets.get(scope, "openai_api_key"),
+
                 )
         except Exception as e:
             logger.warning(f"Could not load from Databricks secrets: {e}")

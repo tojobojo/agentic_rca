@@ -14,9 +14,9 @@ def setup_test_data():
     # 2. Configuration
     TEST_JOB_ID = 999999
     TEST_RUN_ID = 1001
-    MANIFEST_TABLE = "main.rca_history.manifest_log"  # Update if different in your config
-    SOURCE_TABLE = "default.merchant_source"
-    TARGET_TABLE = "default.merchant_retention_output"
+    MANIFEST_TABLE = "dev_dcs_catalog.dev_peergroup_benchmark.rca_manifest_log"  # Update if different in your config
+    SOURCE_TABLE = "dev_dcs_catalog.dev_peergroup_benchmark.rca_merchant_source"
+    TARGET_TABLE = "dev_dcs_catalog.dev_peergroup_benchmark.rca_merchant_retention_output"
     
     # 3. Create & Populate Source Table (1000 Rows)
     print(f"\nCreating Merchant Source Table: {SOURCE_TABLE}")
@@ -57,10 +57,10 @@ def setup_test_data():
     # ats_calculation -> intermediate.ats_scores
     
     intermediates = [
-        "intermediate.smb_list",
-        "intermediate.sample_size",
-        "intermediate.proximity",
-        "intermediate.ats_scores"
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_smb_list",
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_sample_size",
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_proximity",
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores"
     ]
     
     print("\nCreating Intermediate Tables (100 rows each)...")
@@ -74,34 +74,34 @@ def setup_test_data():
     manifest_payload = {
         "identify_smb": {
             "sources": [{"name": SOURCE_TABLE, "type": "TABLE"}], 
-            "targets": [{"name": "intermediate.smb_list", "type": "TABLE"}],
+            "targets": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_smb_list", "type": "TABLE"}],
             "code_content": {"nb1.py": "# Code"}
         },
         "dynamic_sample_size": {
-            "sources": [{"name": "intermediate.smb_list", "type": "TABLE"}],
-            "targets": [{"name": "intermediate.sample_size", "type": "TABLE"}],
+            "sources": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_smb_list", "type": "TABLE"}],
+            "targets": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_sample_size", "type": "TABLE"}],
             "code_content": {"nb2.py": "# Code"}
         },
         "proximity_calculation": {
-            "sources": [{"name": "intermediate.sample_size", "type": "TABLE"}],
-            "targets": [{"name": "intermediate.proximity", "type": "TABLE"}],
+            "sources": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_sample_size", "type": "TABLE"}],
+            "targets": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_proximity", "type": "TABLE"}],
             "code_content": {"nb3.py": "# Code"}  
         },
         "ats_calculation": {
-            "sources": [{"name": "intermediate.proximity", "type": "TABLE"}],
-            "targets": [{"name": "intermediate.ats_scores", "type": "TABLE"}],
+            "sources": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_proximity", "type": "TABLE"}],
+            "targets": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores", "type": "TABLE"}],
             "code_content": {"nb4.py": "# Code"}
         },
         "merchant_retention": {
-            "sources": [{"name": "intermediate.ats_scores", "type": "TABLE"}], 
+            "sources": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores", "type": "TABLE"}], 
             "targets": [{"name": TARGET_TABLE, "type": "TABLE"}],
             "code_content": {
-                "retention_logic.py": "# Retention Logic\ndf = spark.read.table('intermediate.ats_scores')\n# Filter logic that might be wrong\nfinal = df.filter(df.total_txn_amt > 500) \nfinal.write.save('default.merchant_retention_output')"
+                "retention_logic.py": "# Retention Logic\ndf = spark.read.table('dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores')\n# Filter logic that might be wrong\nfinal = df.filter(df.total_txn_amt > 500) \nfinal.write.save('dev_dcs_catalog.dev_peergroup_benchmark.rca_merchant_retention_output')"
             }
         },
         "all_mcc_segmentation": {
              "sources": [{"name": TARGET_TABLE, "type": "TABLE"}],
-             "targets": [{"name": "final.mcc_segments", "type": "TABLE"}],
+             "targets": [{"name": "dev_dcs_catalog.dev_peergroup_benchmark.rca_mcc_segments", "type": "TABLE"}],
              "code_content": {"nb6.py": "# Code"}
         }
     }

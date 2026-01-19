@@ -2,7 +2,7 @@ import logging
 import sys
 import os
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Ensure '.' is in path 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
