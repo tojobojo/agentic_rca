@@ -56,11 +56,11 @@ def setup_test_data():
     # proximity_calculation -> intermediate.proximity
     # ats_calculation -> intermediate.ats_scores
     
-    intermediates = [
         "dev_dcs_catalog.dev_peergroup_benchmark.rca_smb_list",
         "dev_dcs_catalog.dev_peergroup_benchmark.rca_sample_size",
         "dev_dcs_catalog.dev_peergroup_benchmark.rca_proximity",
-        "dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores"
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores",
+        "dev_dcs_catalog.dev_peergroup_benchmark.rca_mcc_segments"
     ]
     
     print("\nCreating Intermediate Tables (100 rows each)...")

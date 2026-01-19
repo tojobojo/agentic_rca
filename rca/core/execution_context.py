@@ -53,8 +53,7 @@ class ExecutionContextBuilder:
         schemas = {}
         spark = _get_or_create_spark()
         if not spark:
-            logger.warning("Spark session not available for schema fetching")
-            return schemas
+            raise RuntimeError("Spark session not available for schema fetching")
         
         for table in tables:
             # Check cache first
