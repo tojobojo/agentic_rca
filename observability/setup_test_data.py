@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType, DoubleType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType, DoubleType, LongType
 import datetime
 import json
 import uuid
@@ -213,7 +213,7 @@ def setup_test_data():
         StructField("task_key", StringType(), True),
         StructField("target_table", StringType(), True),
         StructField("metric_type", StringType(), True),
-        StructField("rows_total", IntegerType(), True),
+        StructField("rows_total", LongType(), True),
         StructField("rows_null_vital", MapType(StringType(), IntegerType()), True),
         StructField("timestamp", StringType(), True)
         # Missing columns will be null, that's fine for Delta mergeSchema
@@ -221,11 +221,8 @@ def setup_test_data():
     
     df_metrics = spark.createDataFrame(metrics_data, m_schema)
     
-    # Save
-    if not spark.catalog.tableExists(METRICS_TABLE):
-         df_metrics.write.format("delta").saveAsTable(METRICS_TABLE)
-    else:
-         df_metrics.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(METRICS_TABLE)
+    # Save (Overwrite to avoid schema conflicts during testing)
+    df_metrics.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(METRICS_TABLE)
          
     print(f"✓ Populated Metrics History with Baseline (Run 1000) and Anomaly (Run {TEST_RUN_ID})")
     print(f"  -> Merchant Retention: Run 1000 (100 -> 100), Run {TEST_RUN_ID} (100 -> 80)")
