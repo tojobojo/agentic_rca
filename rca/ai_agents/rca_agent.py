@@ -216,11 +216,7 @@ class RCAAgent:
                 count_nulls_in_column,
                 get_delta_history,
             ],
-            model_settings={
-                "temperature": self.config.temperature,
-                "max_tokens": self.config.max_tokens,
-                "timeout": self.config.llm_timeout
-            }
+            model_settings=self.config.model_settings
         )
     
     def _build_prompt(self, anomaly: Anomaly, context: ExecutionContext) -> str:

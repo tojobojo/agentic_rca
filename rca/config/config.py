@@ -18,7 +18,7 @@ os.environ["LITELLM_DISABLE_LOGGING"] = "True"
 os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
 
 from agents.extensions.models.litellm_model import LitellmModel
-from agents import set_tracing_disabled
+from agents import set_tracing_disabled, ModelSettings
 
 set_tracing_disabled(True)
 
@@ -118,6 +118,9 @@ class Config(BaseModel):
     
     # Manifest Table (Source of Truth for Lineage)
     manifest_table: str = "rca_manifest_log"
+
+    # LLM settings
+    llm_model: str = os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
     
     model: Optional[Any] = None # Holds the LitellmModel instance
 
@@ -144,6 +147,8 @@ class Config(BaseModel):
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     max_tokens: int = Field(default=10000, ge=1)
     llm_timeout: int = Field(default=60, ge=1)
+
+    model_settings: Optional[ModelSettings] = None
     
     @field_validator('databricks_host')
     @classmethod
@@ -199,6 +204,12 @@ class Config(BaseModel):
         self.model = LitellmModel(
             model=self.llm_model,
             api_key=self.databricks_token
+        )
+        self.model_settings = ModelSettings(
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout=self.llm_timeout,
+            include_usage=True
         )
 
     @classmethod
