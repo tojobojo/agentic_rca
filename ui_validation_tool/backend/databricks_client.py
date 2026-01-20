@@ -376,6 +376,30 @@ class DatabricksService:
         
         return results
 
+    def get_asset_columns(self, identifier: str) -> List[str]:
+        """
+        Fetches column names for a given table identifier.
+        Returns empty list if not found or not a table.
+        """
+        try:
+            # 1. Try Unity Catalog / Hive Metastore via Workspace Client
+            table_info = self.client.tables.get(identifier)
+            if table_info.columns:
+                return [c.name for c in table_info.columns]
+            return []
+        except Exception:
+            # 2. Fallback: If Spark available, try DESCRIBE (covers Views, Temp views, Files?)
+            # Validating files via Spark is slower, but useful.
+            spark = self._get_spark()
+            if spark:
+                try:
+                    df = spark.sql(f"DESCRIBE '{identifier}'").collect()
+                    # DESCRIBE returns col_name, data_type, comment
+                    return [row['col_name'] for row in df if row['col_name'] and not row['col_name'].startswith("#")]
+                except:
+                    pass
+            return []
+
     def save_manifest_to_table(self, table_name: str, manifest: Dict[str, Any], job_id: str, version: str = "1.0") -> str:
         """Saves the generated manifest to a Delta table."""
         spark = self._get_spark()
