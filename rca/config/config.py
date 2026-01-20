@@ -201,10 +201,27 @@ class Config(BaseModel):
 
     def __init__(self, **data):
         super().__init__(**data)
-        self.model = LitellmModel(
-            model=self.llm_model,
-            api_key=self.databricks_token
-        )
+        
+        # LiteLLM expects DATABRICKS_API_KEY and DATABRICKS_API_BASE
+        # Set them from our standard DATABRICKS_TOKEN and DATABRICKS_HOST if not already set
+        if self.databricks_token and not os.getenv("DATABRICKS_API_KEY"):
+            os.environ["DATABRICKS_API_KEY"] = self.databricks_token
+        if self.databricks_host and not os.getenv("DATABRICKS_API_BASE"):
+            os.environ["DATABRICKS_API_BASE"] = self.databricks_host
+        
+        try:
+            if self.databricks_token:
+                self.model = LitellmModel(
+                    model=self.llm_model,
+                    api_key=self.databricks_token
+                )
+            else:
+                logger.warning("DATABRICKS_TOKEN is missing. LitellmModel will not be initialized.")
+                self.model = None
+        except Exception as e:
+            logger.error(f"Failed to initialize LitellmModel: {e}")
+            self.model = None
+
         self.model_settings = ModelSettings(
             temperature=self.temperature,
             max_tokens=self.max_tokens,

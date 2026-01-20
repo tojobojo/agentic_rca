@@ -5,11 +5,6 @@ import json
 import subprocess
 from unittest.mock import patch
 
-# This prevents LitellmModel initialization errors during module import
-print("--> Setting up dummy environment for mock run...")
-os.environ.setdefault("DATABRICKS_HOST", "")
-os.environ.setdefault("DATABRICKS_TOKEN", "")
-os.environ.setdefault("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
 
 def install_packages():
     try:
@@ -26,6 +21,11 @@ def install_packages():
 
 install_packages()
 
+from dotenv import load_dotenv
+
+# CRITICAL: Load environment variables BEFORE any imports that depend on config
+# This ensures DATABRICKS_HOST, DATABRICKS_TOKEN, etc. are available during module initialization
+load_dotenv()
 
 from main import run_rca_orchestrator
 from ai_agents.discovery_agent import DiscoveryAgent, StepInfo
