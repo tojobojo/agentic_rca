@@ -408,14 +408,22 @@ Failed to analyze anomaly after {max_retries} attempts.
         """
         reports = []
         
+        logger.info(f"[RCA Agent] Starting analysis of {len(anomalies_with_context)} anomalies...")
+        
         for i, (anomaly, context) in enumerate(anomalies_with_context):
             logger.info("[RCA Agent] Analyzing anomaly %d/%d: %s...", i+1, len(anomalies_with_context), context.step_id)
             try:
                 report = self.analyze(anomaly, context)
-                reports.append(f"# RCA for Step: {context.step_id}\n\n{report}")
+                if report:
+                    reports.append(f"# RCA for Step: {context.step_id}\n\n{report}")
+                    logger.info(f"[RCA Agent] Successfully generated report for {context.step_id} ({len(report)} chars)")
+                else:
+                    logger.warning(f"[RCA Agent] Empty report returned for {context.step_id}")
+                    reports.append(f"# RCA for Step: {context.step_id}\n\nNo analysis generated.")
             except Exception as e:
                 error_report = f"# RCA for Step: {context.step_id}\n\nError during analysis: {str(e)}"
                 reports.append(error_report)
-                logger.error("RCA error for %s: %s", context.step_id, e)
+                logger.error("RCA error for %s: %s", context.step_id, e, exc_info=True)
         
+        logger.info(f"[RCA Agent] Completed analysis. Generated {len(reports)} reports.")
         return reports
