@@ -17,11 +17,10 @@ os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
 os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
 
-try:
-    from agents.extensions.models.litellm_model import LitellmModel
-except ImportError:
-    LitellmModel = None
+from agents.extensions.models.litellm_model import LitellmModel
+from agents import set_tracing_disabled
 
+set_tracing_disabled(True)
 
 # Load environment variables from .env file if present
 load_dotenv()
@@ -120,9 +119,6 @@ class Config(BaseModel):
     # Manifest Table (Source of Truth for Lineage)
     manifest_table: str = "rca_manifest_log"
     
-    # OpenAI / Model Settings
-    llm_model: str = "databricks/databricks-gpt-oss-20b" # Default to Databricks model
-    
     model: Optional[Any] = None # Holds the LitellmModel instance
 
     # History Table
@@ -143,6 +139,11 @@ class Config(BaseModel):
     # LLM Retry Settings
     llm_max_retries: int = Field(default=3, ge=1, le=10)
     llm_retry_delay_seconds: int = Field(default=2, ge=1)
+
+    # Model Settings
+    temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=10000, ge=1)
+    llm_timeout: int = Field(default=60, ge=1)
     
     @field_validator('databricks_host')
     @classmethod
@@ -188,20 +189,17 @@ class Config(BaseModel):
             max_file_size_mb=int(os.getenv("RCA_MAX_FILE_SIZE_MB", "1")),
             llm_max_retries=int(os.getenv("RCA_LLM_MAX_RETRIES", "3")),
             llm_retry_delay_seconds=int(os.getenv("RCA_LLM_RETRY_DELAY", "2")),
+            temperature=float(os.getenv("TEMPERATURE", "0.1")),
+            max_tokens=int(os.getenv("MAX_TOKENS", "10000")),
+            llm_timeout=int(os.getenv("LLM_TIMEOUT", "60")),
         )
 
     def __init__(self, **data):
         super().__init__(**data)
-        # Initialize LitellmModel if available and not already set
-        if LitellmModel and not self.model:
-            # Use databricks_token as api_key for Databricks models
-            try:
-                self.model = LitellmModel(
-                    model=self.llm_model,
-                    api_key=self.databricks_token
-                )
-            except Exception as e:
-                logger.warning(f"Failed to initialize LitellmModel: {e}")
+        self.model = LitellmModel(
+            model=self.llm_model,
+            api_key=self.databricks_token
+        )
 
     @classmethod
     def from_databricks_secrets(cls, scope: str = "rca-secrets") -> "Config":
@@ -241,14 +239,8 @@ def get_config() -> Config:
     """Get the global configuration instance."""
     global _config
     if _config is None:
-        # Try Databricks secrets first, fallback to env
-        try:
-            _config = Config.from_databricks_secrets()
-        except:
-            _config = Config.from_env()
+        _config = Config.from_env()
     return _config
-
-
 
 
 def get_latest_run_id(job_id: int) -> int:

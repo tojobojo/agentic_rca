@@ -1,0 +1,44 @@
+{
+  "sample_task_1": {
+    "sources": [
+      {
+        "identifier": "raw_data",
+        "subtype": "S3",
+        "usage": "SOURCE"
+      }
+    ],
+    "targets": [
+      {
+        "identifier": "hive_metastore.sales_db.fact_sales",
+        "subtype": "HIVE_METASTORE_TABLE",
+        "usage": "TARGET"
+      }
+    ],
+    "dq_rules": {
+      "hive_metastore.sales_db.fact_sales": [
+        {
+          "column": "order_id",
+          "type": "not_null"
+        },
+        {
+          "column": "amount",
+          "type": "range",
+          "min": "0",
+          "max": "1000"
+        },
+        {
+          "column": "status",
+          "type": "accepted_values",
+          "values": [
+            "PENDING",
+            "COMPLETED"
+          ]
+        }
+      ]
+    },
+    "source_files": [
+      "/path/to/code.py"
+    ],
+    "code_content": "print('hello')"
+  }
+}

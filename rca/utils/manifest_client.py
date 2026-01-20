@@ -80,3 +80,30 @@ class ManifestClient:
             "sources": task_data.get("sources", []),
             "targets": task_data.get("targets", [])
         }
+
+    def resolve_tables_for_steps(
+        self,
+        job_id: int,
+        task_keys: list,
+        manifest_data: Optional[Dict] = None
+    ) -> Dict[str, dict]:
+        """
+        Get source/target tables for multiple pipeline steps.
+        Uses provided manifest_data or fetches latest from table.
+        """
+        result = {}
+        
+        # Use provided manifest or fetch fresh
+        data = manifest_data
+        if not data:
+            data = self.get_latest_manifest(job_id)
+            
+        if not data:
+             # Return empty structure for all keys
+             return {k: {"sources": [], "targets": []} for k in task_keys}
+
+        for key in task_keys:
+            # Manifest is the Source of Truth
+            result[key] = data.get(key, {"sources": [], "targets": []})
+            
+        return result

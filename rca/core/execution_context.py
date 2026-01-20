@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from config.config import get_config, _get_or_create_spark
 from ai_agents.discovery_agent import DiscoveryAgent, StepInfo
-from utils.lineage_client import get_step_tables
+from utils.manifest_client import ManifestClient
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ class ExecutionContextBuilder:
     def __init__(self):
         self.config = get_config()
         self.discovery = DiscoveryAgent()
+        self.manifest_client = ManifestClient()
         self._schema_cache: Dict[str, str] = {}  # Cache schemas to avoid repeated queries
     
     def _fetch_schemas(self, tables: List[str]) -> Dict[str, str]:
@@ -106,9 +107,8 @@ class ExecutionContextBuilder:
             raise ValueError(f"Step {step_id} not found in Job {job_id}")
             
         # 2. Get Lineage (Data)
-        # We fetch lineage for this specific step
-        # Pass manifest_data as fallback
-        table_map = get_step_tables(job_id, [step_id], fallback_to_manifest=manifest_data)
+        # We fetch lineage for this specific step using Manifest
+        table_map = self.manifest_client.resolve_tables_for_steps(job_id, [step_id], manifest_data=manifest_data)
         tables = table_map.get(step_id, {})
         
         raw_sources = tables.get("sources", [])
@@ -128,8 +128,7 @@ class ExecutionContextBuilder:
         source_tables = extract_names(raw_sources)
         target_tables = extract_names(raw_targets)
         
-        # 3. Parse Logic (Simplified)
-        # We no longer rely on complex Regex parsing here. 
+        # 3. Parse Logic 
         # The LLM will analyze the code content directly.
         logic_type = "GENERIC"
         logic_summary = "Logic analysis deferred to LLM"

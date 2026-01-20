@@ -18,3 +18,6 @@ tqdm>=4.66.2
 
 # Data Validation
 pydantic>=2.6.0
+
+# Databricks Connectivity
+databricks-sdk>=0.12.0

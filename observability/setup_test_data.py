@@ -222,7 +222,7 @@ def setup_test_data():
     df_metrics = spark.createDataFrame(metrics_data, m_schema)
     
     # Save (Overwrite to avoid schema conflicts during testing)
-    df_metrics.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(METRICS_TABLE)
+    df_metrics.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(METRICS_TABLE)
          
     print(f"✓ Populated Metrics History with Baseline (Run 1000) and Anomaly (Run {TEST_RUN_ID})")
     print(f"  -> Merchant Retention: Run 1000 (100 -> 100), Run {TEST_RUN_ID} (100 -> 80)")

@@ -41,6 +41,7 @@ class MetricRecord(BaseModel):
     rows_total: int = Field(ge=0, default=0)
     rows_null_vital: Dict[str, int] = Field(default_factory=dict)
     distinct_counts: Dict[str, int] = Field(default_factory=dict)
+    dq_validation_results: Dict[str, Any] = Field(default_factory=dict) # {"rule_name": "PASS" | "FAIL (count)"}
     columns: List[str] = Field(default_factory=list) # Schema Snapshot
     
     # Metadata
@@ -174,7 +175,9 @@ class ObservabilityCollector:
                 targets = task_info.get("targets", [])
                 sources = task_info.get("sources", [])
                 metric_config = task_info.get("metric_config", {})
+                dq_rules_map = task_info.get("dq_rules", {}) # { target_table: [rules] }
                 
+                assets_to_check = [
                 assets_to_check = [
                     (t, "TARGET") for t in targets
                 ] + [
@@ -196,7 +199,7 @@ class ObservabilityCollector:
 
                     if cached_stats:
                         logger.info(f"Using cached metrics for {target} (Run {run.run_id})")
-                        row_count, null_map, distinct_map, status = cached_stats
+                        row_count, null_map, distinct_map, status, cols, dq_res = cached_stats
                         
                         metric = MetricRecord(
                             run_id=str(run.run_id),
@@ -212,7 +215,8 @@ class ObservabilityCollector:
                             rows_total=row_count,
                             rows_null_vital=null_map,
                             distinct_counts=distinct_map,
-                            columns=cached_stats[4] if len(cached_stats) > 4 else [],
+                            dq_validation_results=dq_res,
+                            columns=cols,
                             timestamp=str(datetime.now()),
                             collection_status=status
                         )
@@ -232,10 +236,11 @@ class ObservabilityCollector:
                             duration_ms=duration_ms,
                             run_date_col=table_conf.get("run_id_column") if table_conf else None,
                             date_col=table_conf.get("date_column") if table_conf else None,
-                            table_conf=table_conf
+                            table_conf=table_conf,
+                            dq_rules=dq_rules_map.get(target, [])
                         )
                         # Cache the data part
-                        stats_cache[cache_key] = (metric.rows_total, metric.rows_null_vital, metric.distinct_counts, metric.collection_status, metric.columns)
+                        stats_cache[cache_key] = (metric.rows_total, metric.rows_null_vital, metric.distinct_counts, metric.collection_status, metric.columns, metric.dq_validation_results)
                         
                     metrics.append(metric)
         
@@ -258,12 +263,14 @@ class ObservabilityCollector:
         target_type: str = "UNKNOWN", # Redundant but kept for arg matching
         run_date_col: Optional[str] = None,
         date_col: Optional[str] = None,
-        table_conf: Optional[Dict[str, Any]] = None
+        table_conf: Optional[Dict[str, Any]] = None,
+        dq_rules: List[Dict] = None
     ) -> MetricRecord:
         
         row_count = 0
         null_map = {}
         distinct_map = {}
+        dq_results = {}
         status = "FAILED"
         
         try:
@@ -320,25 +327,75 @@ class ObservabilityCollector:
                     # 1. Null Checks (Everyone gets this)
                     agg_exprs.append(F.sum(F.when(F.col(col_name).isNull(), 1).otherwise(0)).alias(f"null_{col_name}"))
                     
-                    # 2. Distinct Checks (Heuristic to save compute)
-                    # We can't check types easily without schema inspection, which we have (df.dtypes)
-                    # For now, let's just do it for all. Spark is fast enough for localized data.
                     agg_exprs.append(F.countDistinct(col_name).alias(f"distinct_{col_name}"))
 
-                # Execute Aggregation
-                # This might be wide, but Spark handles wide projections well.
-                result_row = filtered_df.agg(*agg_exprs).collect()[0]
+                # 3. DQ RULE CHECKS (Dynamic SQL Generation)
+                dq_exprs = []
+                if dq_rules:
+                    for i, rule in enumerate(dq_rules):
+                        col = rule.get("column")
+                        rtype = rule.get("type")
+                        
+                        # Label for the aggregation result
+                        rule_id = f"dq_rule_{i}" 
+                        
+                        cond = None
+                        if rtype == "not_null":
+                            cond = F.col(col).isNull()
+                        elif rtype == "range":
+                            mn = float(rule.get("min", "-inf"))
+                            mx = float(rule.get("max", "inf"))
+                            cond = (F.col(col) < mn) | (F.col(col) > mx)
+                        elif rtype == "accepted_values":
+                            vals = rule.get("values", [])
+                            cond = ~F.col(col).isin(vals)
+                        elif rtype == "regex":
+                            pat = rule.get("value") # 'value' or 'pattern'
+                            if pat: cond = ~F.col(col).rlike(pat)
+                        elif rtype == "row_count":
+                             # Row Count is a table check, not a row check.
+                             # We handle it post-aggregation
+                             pass
+
+                        if cond is not None:
+                            # Count failing rows
+                            dq_exprs.append(F.sum(F.when(cond, 1).otherwise(0)).alias(rule_id))
+
+                # Execute Single Pass Aggregation
+                final_agg = agg_exprs + dq_exprs
+                result_row = filtered_df.agg(*final_agg).collect()[0]
                 
                 # Parse Results
                 row_count = result_row["total_rows"]
                 
+                # ... Standard Parsing ...
                 for col_name in all_cols:
                     null_val = result_row[f"null_{col_name}"]
                     dist_val = result_row[f"distinct_{col_name}"]
                     
                     null_map[col_name] = null_val if null_val is not None else 0
                     distinct_map[col_name] = dist_val if dist_val is not None else 0
-                 
+
+                # ... DQ Parsing ...
+                if dq_rules:
+                    for i, rule in enumerate(dq_rules):
+                        rname = f"{rule.get('column')} {rule.get('type')}"
+                        rtype = rule.get("type")
+                        
+                        if rtype == "row_count":
+                             min_r = int(rule.get("min", 0))
+                             if row_count < min_r:
+                                 dq_results[rname] = f"FAIL: Found {row_count} < Min {min_r}"
+                             else:
+                                 dq_results[rname] = "PASS"
+                        else:
+                             rule_id = f"dq_rule_{i}"
+                             fail_count = result_row[rule_id]
+                             if fail_count and fail_count > 0:
+                                 dq_results[rname] = f"FAIL: {fail_count} invalid rows"
+                             else:
+                                 dq_results[rname] = "PASS"
+                                          
                 status = "SUCCESS"
             else:
                  logger.warning(f"Table/Path {target} could not be loaded.")
@@ -362,6 +419,7 @@ class ObservabilityCollector:
             rows_total=row_count,
             rows_null_vital=null_map,
             distinct_counts=distinct_map,
+            dq_validation_results=dq_results,
             columns=all_cols if status == "SUCCESS" else [],
             timestamp=str(datetime.now()),
             collection_status=status

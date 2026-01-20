@@ -85,6 +85,7 @@ st.markdown("Generate and validate Unit Catalog lineage mappings for your Databr
 # Initialize Session State
 if 'job_tasks' not in st.session_state: st.session_state['job_tasks'] = []
 if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
+if 'dq_rules' not in st.session_state: st.session_state['dq_rules'] = {} # { "asset_name": [ {rule} ] }
 
 # --- Step 1: Input ---
 with st.expander("1️⃣ Job Configuration", expanded=True):
@@ -331,6 +332,9 @@ if st.session_state['analysis_results']:
             updated_assets_list = edited_df.to_dict("records")
             data["assets"] = updated_assets_list
             
+            # Track assets for DQ selection
+            current_asset_names = []
+
             for _, row in edited_df.iterrows():
                 asset_entry = {
                     "name": row["identifier"],
@@ -340,12 +344,86 @@ if st.session_state['analysis_results']:
                     sources.append(asset_entry)
                 elif row["usage"] == "TARGET":
                     targets.append(asset_entry)
+                
+                # Only offer DQ on Source/Target assets (ignore unknown/blank)
+                if row["identifier"]:
+                    current_asset_names.append(row["identifier"])
             
+            # --- Data Quality Rules UI ---
+            st.markdown("#### 🛡️ Data Quality Rules")
+            
+            dq_col1, dq_col2 = st.columns([1, 2])
+            with dq_col1:
+                selected_asset_for_dq = st.selectbox(
+                    "Select Asset to Add Rules", 
+                    options=["Select Asset..."] + sorted(list(set(current_asset_names))),
+                    key=f"dq_sel_{task_key}"
+                )
+            
+            with dq_col2:
+                if selected_asset_for_dq and selected_asset_for_dq != "Select Asset...":
+                    # Show Existing Rules
+                    current_rules = st.session_state['dq_rules'].get(selected_asset_for_dq, [])
+                    
+                    if current_rules:
+                        st.caption(f"**Current Rules for `{selected_asset_for_dq}`:**")
+                        for ridx, rule in enumerate(current_rules):
+                            r_col_a, r_col_b = st.columns([5, 1])
+                            r_col_a.info(f"**{rule.get('column','*')}** | `{rule['type']}` | {rule.get('value', '')}")
+                            if r_col_b.button("🗑️", key=f"del_rule_{task_key}_{selected_asset_for_dq}_{ridx}"):
+                                st.session_state['dq_rules'][selected_asset_for_dq].pop(ridx)
+                                st.rerun()
+                    else:
+                        st.caption("No rules configured for this asset yet.")
+
+                    # Add New Rule Form
+                    with st.expander("➕ Add New Rule", expanded=True):
+                        with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
+                            fr_c1, fr_c2, fr_c3 = st.columns(3)
+                            
+                            r_col = fr_c1.text_input("Column Name", help="Use '*' for table-level checks (e.g. Row Count)", value="*")
+                            r_type = fr_c2.selectbox("Check Type", [
+                                "not_null", "unique", "row_count", 
+                                "range", "accepted_values", "regex"
+                            ])
+                            r_val = fr_c3.text_input("Value/Param", help="Min-Max (0-100), List (A,B), RegEx pattern")
+                            
+                            if st.form_submit_button("Save Rule"):
+                                new_rule = {"column": r_col, "type": r_type}
+                                
+                                # Simple Parser for Param
+                                if r_val:
+                                    if r_type == "range":
+                                        parts = r_val.split('-')
+                                        if len(parts) == 2:
+                                            new_rule["min"] = parts[0].strip()
+                                            new_rule["max"] = parts[1].strip()
+                                        else:
+                                            new_rule["value"] = r_val # Fallback
+                                    elif r_type == "accepted_values":
+                                        new_rule["values"] = [x.strip() for x in r_val.split(',')]
+                                    else:
+                                        new_rule["value"] = r_val
+                                
+                                # Persist
+                                if selected_asset_for_dq not in st.session_state['dq_rules']:
+                                    st.session_state['dq_rules'][selected_asset_for_dq] = []
+                                st.session_state['dq_rules'][selected_asset_for_dq].append(new_rule)
+                                st.rerun()
+
+            
+            # Persist to Manifest
+            dq_section_manifest = {}
+            for asset_name in current_asset_names:
+                if asset_name in st.session_state['dq_rules'] and st.session_state['dq_rules'][asset_name]:
+                    dq_section_manifest[asset_name] = st.session_state['dq_rules'][asset_name]
+
             final_manifest[task_key] = {
                 "sources": sources,
                 "targets": targets,
+                "dq_rules": dq_section_manifest,
                 "source_files": data.get("source_files", []),
-                "code_content": data.get("source_code_snapshot", {}) # Persist Code!
+                "code_content": data.get("source_code_snapshot", {}) 
             }
 
     # --- Validate & Save Button (Global) ---

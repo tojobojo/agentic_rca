@@ -96,7 +96,12 @@ class AnomalyDetectionEngine:
 
         anomalies = [] # Initialize anomalies list
         
-        # 3. Check for Data Drop (Drop Rate)
+        # 3. Check for Data Quality Violations (Critical)
+        dq_anomaly = self._check_dq_failures(latest)
+        if dq_anomaly:
+            anomalies.append(dq_anomaly)
+
+        # 4. Check for Data Drop (Drop Rate)
         drop_anomaly = self._check_drop_rate(latest, baseline)
         if drop_anomaly:
             anomalies.append(drop_anomaly)
@@ -139,6 +144,7 @@ class AnomalyDetectionEngine:
           "rows_out": Sum(TARGET rows),
           "duration_ms": Sum(duration_ms) or Max(end-start),
           "null_details": {col_name: {source_nulls: X, target_nulls: Y}},
+          "dq_failures": [List of failure strings],
           "raw_metrics": [original_rows] 
         }
         """
@@ -153,12 +159,20 @@ class AnomalyDetectionEngine:
                     "rows_out": 0,
                     "duration_ms": 0,
                     "metrics_by_type": {"SOURCE": [], "TARGET": []},
+                    "dq_failures": [],
                     "timestamp": row.get("timestamp"),
                     "columns": row.get("columns", [])
                 }
             
             m_type = row.get("metric_type", "TARGET") # Default to Target if missing (old logs)
             grouped[rid]["metrics_by_type"][m_type].append(row)
+            
+            # Aggregate DQ Failures
+            dq_res = row.get("dq_validation_results", {})
+            if dq_res:
+                for rule, res in dq_res.items():
+                    if "FAIL" in str(res): # Simple string check
+                        grouped[rid]["dq_failures"].append(f"{row.get('target_table')}: {rule} -> {res}")
             
             # Aggregate Duration (Max of tasks or Sum?)
             # If attempts are sequential, Sum. If parallel (unlikely for 1 task), Max.

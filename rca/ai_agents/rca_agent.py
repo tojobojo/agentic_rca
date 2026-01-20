@@ -208,14 +208,19 @@ class RCAAgent:
         # Define the agent
         self.agent = Agent(
             name="RCADetective",
-            model=self.config.model if self.config.model else self.config.llm_model,
+            model=self.config.model,
             instructions=RCA_DETECTIVE_INSTRUCTIONS,
             tools=[
                 get_table_schema,
                 query_spark_sql,
                 count_nulls_in_column,
                 get_delta_history,
-            ]
+            ],
+            model_settings={
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+                "timeout": self.config.llm_timeout
+            }
         )
     
     def _build_prompt(self, anomaly: Anomaly, context: ExecutionContext) -> str:
