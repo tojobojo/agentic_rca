@@ -20,7 +20,9 @@ class DatabricksService:
         """Attempts to return a DatabricksSession if available (Serverless)."""
         try:
             from databricks.connect import DatabricksSession
-            # User requested serverless builder
+            # User requested serverless builder or cluster
+            if self.config.databricks_cluster_id:
+                return DatabricksSession.builder.clusterId(self.config.databricks_cluster_id).getOrCreate()
             return DatabricksSession.builder.getOrCreate()
         except ImportError:
             return None

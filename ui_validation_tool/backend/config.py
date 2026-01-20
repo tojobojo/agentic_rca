@@ -23,6 +23,7 @@ class UIConfig(BaseModel):
 
     databricks_host: str = os.getenv("DATABRICKS_HOST", "")
     databricks_token: str = os.getenv("DATABRICKS_TOKEN", "")
+    databricks_cluster_id: str = os.getenv("DATABRICKS_CLUSTER_ID", "")
 
     # LLM settings
     llm_model: str = os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b")

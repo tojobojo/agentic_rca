@@ -392,24 +392,25 @@ if st.session_state['analysis_results']:
                         except Exception:
                             pass
 
-                    with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
-                        fr_c1, fr_c2, fr_c3 = st.columns(3)
-                        r_cols = fr_c1.multiselect("Column Name(s)", options=asset_columns, help="Select one or more columns.", default=None)
-                        r_type = fr_c2.selectbox("Check Type", [
-                            "not_null", "unique", "row_count", 
-                            "range", "accepted_values", "regex"
-                        ])
-                        
-                        help_text = "Value/Param"
-                        if r_type == "range": help_text = "Format: min-max (e.g. 0-100)"
-                        elif r_type == "accepted_values": help_text = "Format: A,B,C"
-                        elif r_type == "regex": help_text = "Regular Expression Pattern"
-                        elif r_type == "row_count": help_text = "Minimum Row Count (Integer)"
-                        elif r_type == "unique" or r_type == "not_null": help_text = "Leave empty (Not needed)"
+                    # with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
+                    fr_c1, fr_c2, fr_c3 = st.columns(3)
+                    r_cols = fr_c1.multiselect("Column Name(s)", options=asset_columns, help="Select one or more columns.", default=None, key=f"dqc_{task_key}_{selected_asset_for_dq}")
+                    r_type = fr_c2.selectbox("Check Type", [
+                        "not_null", "unique", "row_count", 
+                        "range", "accepted_values", "regex"
+                    ], key=f"dqt_{task_key}_{selected_asset_for_dq}")
+                    
+                    help_text = "Value/Param"
+                    if r_type == "range": help_text = "Format: min-max (e.g. 0-100)"
+                    elif r_type == "accepted_values": help_text = "Format: A,B,C"
+                    elif r_type == "regex": help_text = "Regular Expression Pattern"
+                    elif r_type == "row_count": help_text = "Minimum Row Count (Integer)"
+                    elif r_type == "unique" or r_type == "not_null": help_text = "Leave empty (Not needed)"
 
-                        r_val = fr_c3.text_input("Value/Param", help=help_text, placeholder=help_text)
-                        
-                        if st.form_submit_button("Save Rule"):
+                    r_val = fr_c3.text_input("Value/Param", help=help_text, placeholder=help_text, key=f"dqv_{task_key}_{selected_asset_for_dq}")
+                    
+                    # Use standard button, not form_submit_button
+                    if st.button("Save Rule", key=f"btn_save_{task_key}_{selected_asset_for_dq}"):
                             if not r_cols:
                                 st.error("❌ Please select at least one column.")
                             else:
