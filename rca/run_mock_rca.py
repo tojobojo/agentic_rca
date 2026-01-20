@@ -22,34 +22,13 @@ def install_packages():
 install_packages()
 
 from dotenv import load_dotenv
-from unittest.mock import MagicMock, patch
 
-# CRITICAL: Load environment variables BEFORE any imports that depend on config
+# Load environment variables (optional in Databricks, but harmless)
 load_dotenv()
-
-# Mock Spark session BEFORE importing main (which imports rca_agent, which uses Spark tools)
-print("--> Setting up Spark session mock...")
-mock_spark = MagicMock()
-mock_df = MagicMock()
-
-# Configure mock DataFrame to behave like a real one
-mock_df.columns = ["id", "merchant_id", "transaction_date", "amount", "status"]
-mock_df.limit.return_value = mock_df
-mock_df.collect.return_value = [
-    {"id": 1, "merchant_id": "M001", "transaction_date": "2024-01-20", "amount": 100.0, "status": "completed"},
-    {"id": 2, "merchant_id": "M002", "transaction_date": "2024-01-20", "amount": 200.0, "status": "completed"}
-]
-
-# Make spark.sql() return the mock DataFrame
-mock_spark.sql.return_value = mock_df
-mock_spark.table.return_value = mock_df
-
-# Patch _get_or_create_spark BEFORE importing main
-spark_patcher = patch("config.config._get_or_create_spark", return_value=mock_spark)
-spark_patcher.start()
 
 from main import run_rca_orchestrator
 from ai_agents.discovery_agent import DiscoveryAgent, StepInfo
+from unittest.mock import patch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
