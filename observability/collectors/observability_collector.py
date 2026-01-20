@@ -178,7 +178,6 @@ class ObservabilityCollector:
                 dq_rules_map = task_info.get("dq_rules", {}) # { target_table: [rules] }
                 
                 assets_to_check = [
-                assets_to_check = [
                     (t, "TARGET") for t in targets
                 ] + [
                     (s, "SOURCE") for s in sources

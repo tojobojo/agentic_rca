@@ -133,6 +133,23 @@ class AnomalyDetectionEngine:
             
         return anomalies
 
+    def _check_dq_failures(self, latest: Dict) -> Optional[Anomaly]:
+        """Check for explicit Data Quality rule failures."""
+        failures = latest.get("dq_failures", [])
+        if not failures:
+            return None
+            
+        return Anomaly(
+            run_id=latest["run_id"],
+            step_id=latest["step_id"],
+            metric_name="dq_rule_failure",
+            current_value=float(len(failures)),
+            historical_avg=0.0,
+            deviation_z_score=0.0,
+            severity="high",
+            reason=f"Data Quality Rules Failed ({len(failures)}): {'; '.join(failures[:3])}..."
+        )
+
     def _consolidate_run_metrics(self, history: List[Dict]) -> List[Dict]:
         """
         Convert raw rows (Source, Target, Attempts) into logical Step Executions.

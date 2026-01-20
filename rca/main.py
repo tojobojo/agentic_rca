@@ -10,26 +10,45 @@ Workflow:
 5. Reporting: Generate Markdown report.
 """
 
-import subprocess
-import sys
-from typing import List
-
-def install_packages(packages: List[str]):
-    # Always run pip install to ensure all requirements are met
-    pass
-    for package in packages:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        print(f"Installed {package}")
-
-install_packages(["python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
-
 import argparse
 import os
 import sys
 import logging
+import subprocess
 from datetime import datetime
 from typing import List, Tuple
 
+def install_packages():
+    try:
+        print("Importing...")
+        import agents
+        return
+    except ImportError:
+        print("Import error")
+        pass
+    
+    # Check if packages are installed
+    packages = ["python-dotenv>=1.0.0", "pydantic>=2.5.2", "openai-agents>=0.6.5", "httpx>=0.27.0", "databricks-sdk>=0.1.0", "litellm>=1.0.0", "tqdm>=4.66.1"]
+        
+    # Just force install for now to be safe as per original logic, but suppress output a bit
+    for package in packages:
+        try:
+             subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet", "--disable-pip-version-check"])
+             print(f"Installed {package}")
+        except Exception as e:
+             print(f"Warning: Failed to install {package}: {e}")
+
+install_packages()
+
+from config.config import get_config
+from core.execution_context import ExecutionContextBuilder, ExecutionContext
+from core.anomaly_engine import AnomalyDetectionEngine, Anomaly
+from ai_agents.rca_agent import RCAAgent
+from utils.telemetry import PerformanceMetrics, PhaseTimer
+import time
+import json
+
+logger = logging.getLogger(__name__)
 
 from config.config import get_config
 
@@ -222,11 +241,20 @@ def main():
     # Setup logging
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     
-    run_rca_orchestrator(
-        job_id=args.job_id,
-        run_id=args.run_id,
-        manifest_path=args.manifest
-    )
+    try:
+        run_rca_orchestrator(
+            job_id=args.job_id,
+            run_id=args.run_id,
+            manifest_path=args.manifest
+        )
+    except ValueError as e:
+        logger.error(f"Execution Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Critical Failure: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

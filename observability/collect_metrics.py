@@ -9,15 +9,20 @@ import subprocess
 import sys
 from typing import List
 
-def install_packages(packages: List[str]):
-    # Always run pip install to ensure all requirements are met
-    pass
+def install_packages():
+    try:
+        print("Importing...")
+        import dotenv
+        return
+    except ImportError:
+        print("Import error")
+        pass
+    packages = ["python-dotenv>=1.0.0", "pydantic>=2.5.2"]
     for package in packages:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         print(f"Installed {package}")
 
-install_packages(["python-dotenv>=1.0.0", "pydantic>=2.5.2", "httpx>=0.27.0", "databricks-sdk>=0.1.0"])
-
+install_packages()
 
 import argparse
 import logging

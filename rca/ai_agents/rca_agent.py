@@ -345,12 +345,22 @@ Please investigate why this step behaved anomalously.
         
         for attempt in range(max_retries):
             try:
-                # Run the agent
                 result = await Runner.run(
                     self.agent,
                     prompt,
                 )
-                return result.final_output
+                
+                final_report = result.final_output
+                
+                # Append Token Usage if available
+                if hasattr(result, "usage") and result.usage:
+                    u = result.usage
+                    final_report += f"\n\n## Token Usage\n"
+                    final_report += f"- Total: {u.total_tokens}\n"
+                    final_report += f"- Prompt: {u.prompt_tokens}\n"
+                    final_report += f"- Completion: {u.completion_tokens}\n"
+                    
+                return final_report
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (2 ** attempt)  # Exponential backoff

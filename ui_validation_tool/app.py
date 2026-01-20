@@ -258,7 +258,7 @@ if st.session_state['job_tasks']:
 
 # --- Sidebar Stats ---
 if st.session_state['analysis_results']:
-    total_tokens = sum([t.get("token_stats", {}).get("total", 0) for t in st.session_state['analysis_results'].values()])
+    total_tokens = sum([t.get("token_stats", {}).get("total_tokens", 0) for t in st.session_state['analysis_results'].values()])
     st.sidebar.markdown("### 📊 Analysis Stats")
     st.sidebar.metric("Total Tokens (Est.)", total_tokens)
 

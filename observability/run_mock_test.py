@@ -1,3 +1,21 @@
+import subprocess
+import sys
+
+def install_packages():
+    try:
+        print("Importing...")
+        import dotenv
+        return
+    except ImportError:
+        print("Import error")
+        pass
+    packages = ["python-dotenv>=1.0.0", "pydantic>=2.5.2"]
+    for package in packages:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        print(f"Installed {package}")
+
+install_packages()
+
 import logging
 from unittest.mock import MagicMock
 from datetime import datetime
