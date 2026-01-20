@@ -202,12 +202,17 @@ class Config(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         
-        # LiteLLM expects DATABRICKS_API_KEY and DATABRICKS_API_BASE
-        # Set them from our standard DATABRICKS_TOKEN and DATABRICKS_HOST if not already set
+        # LiteLLM requires DATABRICKS_API_KEY and DATABRICKS_API_BASE environment variables
+        # Set them from our standard DATABRICKS_TOKEN and DATABRICKS_HOST
         if self.databricks_token and not os.getenv("DATABRICKS_API_KEY"):
             os.environ["DATABRICKS_API_KEY"] = self.databricks_token
+        
         if self.databricks_host and not os.getenv("DATABRICKS_API_BASE"):
-            os.environ["DATABRICKS_API_BASE"] = self.databricks_host
+            # Ensure the base URL ends with /serving-endpoints for litellm
+            base_url = self.databricks_host.rstrip('/')
+            if not base_url.endswith('/serving-endpoints'):
+                base_url = f"{base_url}/serving-endpoints"
+            os.environ["DATABRICKS_API_BASE"] = base_url
         
         try:
             if self.databricks_token:
