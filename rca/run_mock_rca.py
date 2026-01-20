@@ -34,16 +34,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def run_mock_rca():
-    print("--> Running RCA Agent with Mocked Discovery...")
+    print("--> Running RCA Agent with Mocked Discovery and Spark tools...")
     
     JOB_ID = 999999
     RUN_ID = 1001
     MANIFEST_PATH = "sample_manifest.json"
     
-    # 1. Mock Discovery Agent methods
-    # We want to intercept 'fetch_job_definition' to return a fake job structure
-    # matching our test data (Task: "test_step_1").
+    # Mock Spark tools to prevent agent from hitting max turns
+    def mock_get_table_schema(table_name: str):
+        return f"Schema for {table_name}: id (bigint), merchant_id (string), transaction_date (date), amount (decimal), status (string)"
     
+    def mock_query_spark_sql(query: str):
+        return "Query executed successfully. Sample result: 1000 rows affected."
+    
+    def mock_count_nulls(table_name: str, column_name: str):
+        return f"Null count in {table_name}.{column_name}: 42 (0.5% of total rows)"
+    
+    def mock_delta_history(table_name: str):
+        return f"Delta history for {table_name}: Last 3 operations - INSERT (2024-01-20), UPDATE (2024-01-19), DELETE (2024-01-18)"
+    
+    # Mock Discovery Agent methods
     mock_job_def = {
         "job_id": JOB_ID,
         "settings": {
@@ -59,12 +69,13 @@ def run_mock_rca():
         }
     }
     
-    # We also need to mock `fetch_code_from_workspace` because we don't have access to the workspace.
-    # It should return some dummy code or None (fallback to Manifest).
-    
-    with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_job_definition", return_value=mock_job_def) as mock_fetch_job:
-        with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_code_from_workspace", return_value=None) as mock_fetch_code:
-             with patch("databricks.sdk.WorkspaceClient") as mock_ws_client:
+    with patch("ai_agents.rca_agent.get_table_schema", side_effect=mock_get_table_schema):
+        with patch("ai_agents.rca_agent.query_spark_sql", side_effect=mock_query_spark_sql):
+            with patch("ai_agents.rca_agent.count_nulls_in_column", side_effect=mock_count_nulls):
+                with patch("ai_agents.rca_agent.get_delta_history", side_effect=mock_delta_history):
+                    with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_job_definition", return_value=mock_job_def):
+                        with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_code_from_workspace", return_value=None):
+                            with patch("databricks.sdk.WorkspaceClient"):
              
                     # We also need to ensure 'get_latest_run_id' isn't called if we pass run_id.
                     # run_rca_orchestrator calls it if run_id is None. We are passing 1001.
