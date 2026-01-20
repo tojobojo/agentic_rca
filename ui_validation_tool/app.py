@@ -500,10 +500,7 @@ if st.session_state['analysis_results']:
                             st.error(save_res)
             
             # 5. Rerun to show updated statuses in the tables (using a brief pause or just rerun)
-            # st.rerun() # Rerun clears the success/error messages! 
-            # Solution: We rely on the button callback flow. 
-            # To make the tables update, we NEED to rerun. 
-            # To keep the message, we can use session_state for the message.
+            # Rerun to update table statuses, using session state to persist messages.
             
             st.session_state['last_validation_msg'] = {
                 "type": "error" if validation_error_count > 0 else "success",

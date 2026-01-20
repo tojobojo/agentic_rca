@@ -77,7 +77,7 @@ class AnomalyDetectionEngine:
             logger.info(f"No history found for {step_id}. Skipping detection.")
             return []
             
-        # 2. Consolidate Metrics (Adapter for New Schema)
+        # 2. Consolidate Metrics
         # Group raw rows by run_id to form "Step Executions"
         consolidated_history = self._consolidate_run_metrics(history)
         if not consolidated_history:
@@ -469,14 +469,8 @@ class AnomalyDetectionEngine:
         
         last_run = baseline[0]
         
-        # Columns might be in 'columns' field (if we updated collector) or we infer.
-        # Collector update ensured 'columns' is in MetricRecord.
-        
-        # We need to extract columns from the TARGET metrics inside the run
-        # Implementation Detail: _consolidate_run_metrics puts 'columns' at run level? 
-        # No, we added it to run dict from 'row.get("columns")'.
-        # Since a run has multiple metric rows (Source/Target), which one?
-        # Usually TARGET has the interesting schema.
+        # We need to extract columns from the TARGET metrics inside the run.
+        # Use target schemas from the latest run.
         
         def get_target_cols(run_data):
             targets = run_data["metrics_by_type"].get("TARGET", [])

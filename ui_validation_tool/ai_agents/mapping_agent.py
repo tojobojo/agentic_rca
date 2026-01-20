@@ -205,7 +205,7 @@ Rules:
                 logger.error(f"Config analysis failed: {e}")
                 log(f"Config analysis failed: {e}")
 
-        # 2b. Analyze Scripts (Sequentially - reduces burst output tokens)
+        # 2b. Analyze Scripts (Sequentially)
         for fname in script_files:
             if fname not in code_context: continue
             
