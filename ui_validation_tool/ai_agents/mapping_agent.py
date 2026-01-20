@@ -263,7 +263,6 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             logic_summary=f"Analyzed {len(relevant_files)} files. Found {len(final_assets)} assets.",
             resolution_trace=resolution_trace,
             ignored_files=ignored_files,
-            ignored_files=ignored_files,
             source_files=relevant_files, # Capture Source Files
             source_code_snapshot={f: code_context[f] for f in relevant_files if f in code_context}, # Capture Content
             token_stats=token_usage

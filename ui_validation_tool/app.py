@@ -377,39 +377,39 @@ if st.session_state['analysis_results']:
                         st.caption("No rules configured for this asset yet.")
 
                     # Add New Rule Form
-                    with st.expander("➕ Add New Rule", expanded=True):
-                        with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
-                            fr_c1, fr_c2, fr_c3 = st.columns(3)
+                    st.markdown("##### ➕ Add New Rule")
+                    with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
+                        fr_c1, fr_c2, fr_c3 = st.columns(3)
+                        
+                        r_col = fr_c1.text_input("Column Name", help="Use '*' for table-level checks (e.g. Row Count)", value="*")
+                        r_type = fr_c2.selectbox("Check Type", [
+                            "not_null", "unique", "row_count", 
+                            "range", "accepted_values", "regex"
+                        ])
+                        r_val = fr_c3.text_input("Value/Param", help="Min-Max (0-100), List (A,B), RegEx pattern")
+                        
+                        if st.form_submit_button("Save Rule"):
+                            new_rule = {"column": r_col, "type": r_type}
                             
-                            r_col = fr_c1.text_input("Column Name", help="Use '*' for table-level checks (e.g. Row Count)", value="*")
-                            r_type = fr_c2.selectbox("Check Type", [
-                                "not_null", "unique", "row_count", 
-                                "range", "accepted_values", "regex"
-                            ])
-                            r_val = fr_c3.text_input("Value/Param", help="Min-Max (0-100), List (A,B), RegEx pattern")
-                            
-                            if st.form_submit_button("Save Rule"):
-                                new_rule = {"column": r_col, "type": r_type}
-                                
-                                # Simple Parser for Param
-                                if r_val:
-                                    if r_type == "range":
-                                        parts = r_val.split('-')
-                                        if len(parts) == 2:
-                                            new_rule["min"] = parts[0].strip()
-                                            new_rule["max"] = parts[1].strip()
-                                        else:
-                                            new_rule["value"] = r_val # Fallback
-                                    elif r_type == "accepted_values":
-                                        new_rule["values"] = [x.strip() for x in r_val.split(',')]
+                            # Simple Parser for Param
+                            if r_val:
+                                if r_type == "range":
+                                    parts = r_val.split('-')
+                                    if len(parts) == 2:
+                                        new_rule["min"] = parts[0].strip()
+                                        new_rule["max"] = parts[1].strip()
                                     else:
-                                        new_rule["value"] = r_val
-                                
-                                # Persist
-                                if selected_asset_for_dq not in st.session_state['dq_rules']:
-                                    st.session_state['dq_rules'][selected_asset_for_dq] = []
-                                st.session_state['dq_rules'][selected_asset_for_dq].append(new_rule)
-                                st.rerun()
+                                        new_rule["value"] = r_val # Fallback
+                                elif r_type == "accepted_values":
+                                    new_rule["values"] = [x.strip() for x in r_val.split(',')]
+                                else:
+                                    new_rule["value"] = r_val
+                            
+                            # Persist
+                            if selected_asset_for_dq not in st.session_state['dq_rules']:
+                                st.session_state['dq_rules'][selected_asset_for_dq] = []
+                            st.session_state['dq_rules'][selected_asset_for_dq].append(new_rule)
+                            st.rerun()
 
             
             # Persist to Manifest
