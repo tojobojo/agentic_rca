@@ -76,33 +76,29 @@ def run_mock_rca():
                     with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_job_definition", return_value=mock_job_def):
                         with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_code_from_workspace", return_value=None):
                             with patch("databricks.sdk.WorkspaceClient"):
-             
-                    # We also need to ensure 'get_latest_run_id' isn't called if we pass run_id.
-                    # run_rca_orchestrator calls it if run_id is None. We are passing 1001.
-                    
-                    print(f"--> Invoking RCA Orchestrator for Job {JOB_ID}, Run {RUN_ID}...")
-                    
-                    try:
-                        report = run_rca_orchestrator(
-                            job_id=JOB_ID,
-                            run_id=RUN_ID,
-                            manifest_path=MANIFEST_PATH,
-                            output_path="test_report.md"
-                        )
-                        
-                        print("\n✅ RCA Execution Complete!")
-                        print(f"Report generated at: test_report.md")
-                        
-                        # Print snippet of report
-                        print("\n--- Report Snippet ---\n")
-                        lines = report.split('\n')
-                        print("\n".join(lines[:20]))
-                        print("...")
-                        
-                    except Exception as e:
-                        print(f"❌ RCA Failed: {e}")
-                        import traceback
-                        traceback.print_exc()
+                                print(f"--> Invoking RCA Orchestrator for Job {JOB_ID}, Run {RUN_ID}...")
+                                
+                                try:
+                                    report = run_rca_orchestrator(
+                                        job_id=JOB_ID,
+                                        run_id=RUN_ID,
+                                        manifest_path=MANIFEST_PATH,
+                                        output_path="test_report.md"
+                                    )
+                                    
+                                    print("\n[SUCCESS] RCA Execution Complete!")
+                                    print(f"Report generated at: test_report.md")
+                                    
+                                    # Print snippet of report
+                                    print("\n--- Report Snippet ---\n")
+                                    lines = report.split('\n')
+                                    print("\n".join(lines[:20]))
+                                    print("...")
+                                    
+                                except Exception as e:
+                                    print(f"[ERROR] RCA Failed: {e}")
+                                    import traceback
+                                    traceback.print_exc()
 
 if __name__ == "__main__":
     run_mock_rca()
