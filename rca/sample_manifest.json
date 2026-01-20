@@ -12,9 +12,13 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "nb1.py": "# Code"
-        }
+        },
+        "source_files": [
+            "nb1.py"
+        ]
     },
     "dynamic_sample_size": {
         "sources": [
@@ -29,9 +33,13 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "nb2.py": "# Code"
-        }
+        },
+        "source_files": [
+            "nb2.py"
+        ]
     },
     "proximity_calculation": {
         "sources": [
@@ -46,9 +54,13 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "nb3.py": "# Code"
-        }
+        },
+        "source_files": [
+            "nb3.py"
+        ]
     },
     "ats_calculation": {
         "sources": [
@@ -63,9 +75,13 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "nb4.py": "# Code"
-        }
+        },
+        "source_files": [
+            "nb4.py"
+        ]
     },
     "merchant_retention": {
         "sources": [
@@ -80,9 +96,13 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "retention_logic.py": "# Retention Logic\ndf = spark.read.table('dev_dcs_catalog.dev_peergroup_benchmark.rca_ats_scores')\n# Filter logic that might be wrong\nfinal = df.filter(df.total_txn_amt > 500) \nfinal.write.save('dev_dcs_catalog.dev_peergroup_benchmark.rca_merchant_retention_output')"
-        }
+        },
+        "source_files": [
+            "retention_logic.py"
+        ]
     },
     "all_mcc_segmentation": {
         "sources": [
@@ -97,8 +117,12 @@
                 "type": "TABLE"
             }
         ],
+        "dq_rules": {},
         "code_content": {
             "nb6.py": "# Code"
-        }
+        },
+        "source_files": [
+            "nb6.py"
+        ]
     }
 }

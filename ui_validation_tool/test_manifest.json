@@ -40,5 +40,12 @@
       "/path/to/code.py"
     ],
     "code_content": "print('hello')"
+  },
+  "sample_task_2": {
+    "sources": [],
+    "targets": [],
+    "dq_rules": {},
+    "source_files": [],
+    "code_content": "# empty"
   }
 }
