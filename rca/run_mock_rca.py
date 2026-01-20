@@ -5,6 +5,12 @@ import json
 import subprocess
 from unittest.mock import patch
 
+# This prevents LitellmModel initialization errors during module import
+print("--> Setting up dummy environment for mock run...")
+os.environ.setdefault("DATABRICKS_HOST", "")
+os.environ.setdefault("DATABRICKS_TOKEN", "")
+os.environ.setdefault("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
+
 def install_packages():
     try:
         print("Importing...")
