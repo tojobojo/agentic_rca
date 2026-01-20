@@ -34,24 +34,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def run_mock_rca():
-    print("--> Running RCA Agent with Mocked Discovery and Spark tools...")
+    print("--> Running RCA Agent with Mocked Spark session...")
     
     JOB_ID = 999999
     RUN_ID = 1001
     MANIFEST_PATH = "sample_manifest.json"
     
-    # Mock Spark tools to prevent agent from hitting max turns
-    def mock_get_table_schema(table_name: str):
-        return f"Schema for {table_name}: id (bigint), merchant_id (string), transaction_date (date), amount (decimal), status (string)"
-    
-    def mock_query_spark_sql(query: str):
-        return "Query executed successfully. Sample result: 1000 rows affected."
-    
-    def mock_count_nulls(table_name: str, column_name: str):
-        return f"Null count in {table_name}.{column_name}: 42 (0.5% of total rows)"
-    
-    def mock_delta_history(table_name: str):
-        return f"Delta history for {table_name}: Last 3 operations - INSERT (2024-01-20), UPDATE (2024-01-19), DELETE (2024-01-18)"
+    # Mock Spark session and its methods
+    from unittest.mock import MagicMock
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_df.collect.return_value = [{"schema": "mocked"}]
+    mock_spark.sql.return_value = mock_df
+    mock_spark.table.return_value = mock_df
     
     # Mock Discovery Agent methods
     mock_job_def = {
@@ -69,36 +64,34 @@ def run_mock_rca():
         }
     }
     
-    with patch("ai_agents.rca_agent.get_table_schema", side_effect=mock_get_table_schema):
-        with patch("ai_agents.rca_agent.query_spark_sql", side_effect=mock_query_spark_sql):
-            with patch("ai_agents.rca_agent.count_nulls_in_column", side_effect=mock_count_nulls):
-                with patch("ai_agents.rca_agent.get_delta_history", side_effect=mock_delta_history):
-                    with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_job_definition", return_value=mock_job_def):
-                        with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_code_from_workspace", return_value=None):
-                            with patch("databricks.sdk.WorkspaceClient"):
-                                print(f"--> Invoking RCA Orchestrator for Job {JOB_ID}, Run {RUN_ID}...")
-                                
-                                try:
-                                    report = run_rca_orchestrator(
-                                        job_id=JOB_ID,
-                                        run_id=RUN_ID,
-                                        manifest_path=MANIFEST_PATH,
-                                        output_path="test_report.md"
-                                    )
-                                    
-                                    print("\n[SUCCESS] RCA Execution Complete!")
-                                    print(f"Report generated at: test_report.md")
-                                    
-                                    # Print snippet of report
-                                    print("\n--- Report Snippet ---\n")
-                                    lines = report.split('\n')
-                                    print("\n".join(lines[:20]))
-                                    print("...")
-                                    
-                                except Exception as e:
-                                    print(f"[ERROR] RCA Failed: {e}")
-                                    import traceback
-                                    traceback.print_exc()
+    # Patch Spark session getter
+    with patch("config.config._get_or_create_spark", return_value=mock_spark):
+        with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_job_definition", return_value=mock_job_def):
+            with patch("ai_agents.discovery_agent.DiscoveryAgent.fetch_code_from_workspace", return_value=None):
+                with patch("databricks.sdk.WorkspaceClient"):
+                    print(f"--> Invoking RCA Orchestrator for Job {JOB_ID}, Run {RUN_ID}...")
+                    
+                    try:
+                        report = run_rca_orchestrator(
+                            job_id=JOB_ID,
+                            run_id=RUN_ID,
+                            manifest_path=MANIFEST_PATH,
+                            output_path="test_report.md"
+                        )
+                        
+                        print("\n[SUCCESS] RCA Execution Complete!")
+                        print(f"Report generated at: test_report.md")
+                        
+                        # Print snippet of report
+                        print("\n--- Report Snippet ---\n")
+                        lines = report.split('\n')
+                        print("\n".join(lines[:20]))
+                        print("...")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] RCA Failed: {e}")
+                        import traceback
+                        traceback.print_exc()
 
 if __name__ == "__main__":
     run_mock_rca()
