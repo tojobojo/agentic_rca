@@ -6,6 +6,12 @@ from backend.databricks_client import DatabricksService
 from backend.config import get_config, setup_logging
 from ai_agents.mapping_agent import MappingAgent
 
+# Import utility modules
+from utils.session_state import initialize_session_state, set_active_task, initialize_task_data
+from utils.validators import validate_manifest_completeness
+from utils.manifest_utils import get_cache_key, check_manifest_changes, add_manifest_metadata
+from ui.components import render_sidebar
+
 # Setup Page Config (MUST BE FIRST)
 st.set_page_config(
     page_title="RCA Configuration & Validation",
@@ -58,42 +64,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Sidebar ---
-with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/6/63/Databricks_Logo.png", width=150)
-    st.title("Settings")
-    
-    st.markdown("### 🔑 API Config")
-    st.info("Configuration loaded from Environment Variables.")
-    
-    st.markdown("### ⚙️ Job Parameters")
-    job_params_input = st.text_area("JSON Parameters", value='{"env": "prod"}', height=100)
-
-    st.markdown("### 💾 Manifest Config")
-    # Read from Config (Env Var)
-    manifest_table = config.manifest_table
-    st.text_input("Manifest Table (Read-only)", value=manifest_table, disabled=True, help="Target Delta table (set via RCA_MANIFEST_TABLE env var)")
-    manifest_version_input = st.text_input("Manifest Version", value="1.0", help="Version tag for this run")
-    
-    st.markdown("---")
-    st.markdown("### ℹ️ Help")
-    st.markdown("1. Enter **Job ID**.\n2. **Select Tasks** to analyze.\n3. **Run AI Analysis** to map lineage.\n4. **Validate** & **Save** manifest.")
+job_params_input, manifest_table, manifest_version_input = render_sidebar(config)
 
 # --- Main Content ---
 st.title("🔍 Agentic RCA Validator")
-st.markdown("Generate and validate Unit Catalog lineage mappings for your Databricks Jobs.")
+st.markdown("Generate and validate Unity Catalog lineage mappings for your Databricks Jobs.")
 
 # Initialize Session State
-if 'job_tasks' not in st.session_state: st.session_state['job_tasks'] = []
-if 'analysis_results' not in st.session_state: st.session_state['analysis_results'] = {}
-if 'dq_rules' not in st.session_state: st.session_state['dq_rules'] = {} # { "asset_name": [ {rule} ] }
-if 'column_cache' not in st.session_state: st.session_state['column_cache'] = {}
-if 'expanded_task' not in st.session_state: st.session_state['expanded_task'] = None
+initialize_session_state()
 
-def set_active_task(task_key):
-    """Callback to keep target task expanded on interaction."""
-    st.session_state['expanded_task'] = task_key
-
-# --- Step 1: Input ---
+# --- Step 1: Job Configuration ---
 with st.expander("1️⃣ Job Configuration", expanded=True):
     job_id_input = st.text_input("Databricks Job ID", help="The numeric ID of your Databricks Job")
 
@@ -101,316 +81,404 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
         if job_id_input:
             with st.spinner("Fetching Job Details..."):
                 try:
-                    # 1. Fetch Job
                     db_service = DatabricksService()
                     tasks = db_service.get_job_tasks(int(job_id_input))
-                    st.session_state['job_tasks'] = tasks
                     
-                    # Log filtering stats
-                    valid_count = len([t for t in tasks if t.get('task_type') and t['task_type'].lower() != "unknown"])
-                    st.success(f"✅ Found {valid_count} valid tasks (and {len(tasks)-valid_count} ignored unknown/empty types).")
-
+                    # Filter out unknown task types
+                    valid_tasks = [
+                        t for t in tasks 
+                        if t.get('task_type') and t['task_type'].lower() != "unknown"
+                    ]
+                    
+                    st.session_state['job_tasks'] = valid_tasks
+                    st.session_state['job_task_snapshot'] = [t['task_key'] for t in valid_tasks]
+                    
+                    # Initialize task data for all tasks
+                    for task in valid_tasks:
+                        initialize_task_data(task['task_key'])
+                    
+                    # Auto-expand first task
+                    if valid_tasks:
+                        st.session_state['expanded_task'] = valid_tasks[0]['task_key']
+                    
+                    # Clear analysis cache and counter on new job fetch
+                    st.session_state['analysis_cache'] = {}
+                    st.session_state['analysis_run_count'] = 0
+                    st.session_state['excluded_tasks'] = []
+                    st.session_state['loaded_manifest_version'] = None
+                    
+                    st.success(f"✅ Found {len(valid_tasks)} valid tasks (filtered out {len(tasks)-len(valid_tasks)} unknown types).")
+                    
+                    # Query for existing manifest
+                    if manifest_table:
+                        manifest_result = db_service.load_latest_manifest(manifest_table, job_id_input)
+                        
+                        if manifest_result.get('found'):
+                            st.session_state['existing_manifest'] = manifest_result
+                        else:
+                            st.session_state['existing_manifest'] = None
+                    
                 except Exception as e:
                     st.error(f"Error: {e}")
         else:
             st.warning("Please enter Job ID.")
 
-# --- Step 2: Task Selection ---
+# --- Step 1.5: Load Existing Manifest ---
+if st.session_state.get('existing_manifest') and st.session_state.get('loaded_manifest_version') is None:
+    manifest_info = st.session_state['existing_manifest']
+    
+    st.markdown("---")
+    st.markdown("### 📋 Existing Manifest Found")
+    
+    col_info, col_actions = st.columns([2, 1])
+    
+    with col_info:
+        st.info(f"""
+**Status:** {manifest_info['status']}  
+**Version:** {manifest_info['version']}  
+**Last Updated:** {manifest_info['date']}  
+**Created By:** {manifest_info['created_by']}
+        """)
+    
+    with col_actions:
+        if st.button("📥 Load Existing", type="primary"):
+            # Load manifest data
+            manifest_data = manifest_info['manifest_data']
+            
+            # Detect changes
+            current_task_keys = set([t['task_key'] for t in st.session_state['job_tasks']])
+            manifest_task_keys = set(manifest_data.keys())
+            excluded_tasks = set(manifest_data.get('_metadata', {}).get('excluded_tasks', []))
+            job_snapshot = set(manifest_data.get('_metadata', {}).get('job_task_snapshot', manifest_task_keys))
+            
+            # Truly new tasks (not user-deleted)
+            truly_new = current_task_keys - job_snapshot
+            
+            # Job-removed tasks
+            job_removed = job_snapshot - current_task_keys
+            
+            # Load task data
+            for task_key in current_task_keys:
+                if task_key in manifest_data and task_key not in excluded_tasks:
+                    # Load from manifest
+                    st.session_state['task_data'][task_key] = {
+                        'sources': manifest_data[task_key].get('sources', [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]),
+                        'targets': manifest_data[task_key].get('targets', [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}])
+                    }
+                    
+                    # Load DQ rules
+                    dq_rules = manifest_data[task_key].get('dq_rules', {})
+                    for asset_name, rules in dq_rules.items():
+                        st.session_state['dq_rules'][asset_name] = rules
+            
+            # Track excluded tasks
+            st.session_state['excluded_tasks'] = list(excluded_tasks)
+            st.session_state['loaded_manifest_version'] = manifest_info['version']
+            
+            # Show change summary
+            change_msg = f"✅ Loaded manifest v{manifest_info['version']}"
+            if truly_new:
+                change_msg += f" + {len(truly_new)} new task(s) detected"
+            if job_removed:
+                st.warning(f"⚠️ {len(job_removed)} task(s) removed from job: {', '.join(job_removed)}")
+            
+            st.success(change_msg)
+            st.rerun()
+        
+        if st.button("🆕 Start Fresh"):
+            st.session_state['existing_manifest'] = None
+            st.session_state['loaded_manifest_version'] = "new"
+            st.info("Starting fresh manifest creation.")
+            st.rerun()
+
+
+# --- Step 1.5: AI Analyze All Tasks ---
 if st.session_state['job_tasks']:
-    st.markdown("### 2️⃣ Select Tasks to Analyze")
+    st.markdown("---")
+    col_analyze, col_info = st.columns([1, 3])
     
-    # 1. Filter Logic
-    valid_tasks = [
-        t for t in st.session_state['job_tasks'] 
-        if t.get('task_type') and t['task_type'].lower() != "unknown"
-    ]
+    # Track if analysis has been run
+    if 'analysis_run_count' not in st.session_state:
+        st.session_state['analysis_run_count'] = 0
     
-    if not valid_tasks:
-        st.warning("No valid tasks found (filtered out unknown/empty types).")
-    else:
-        # Initialize selection state if not present
-        if "task_selection" not in st.session_state:
-            st.session_state.task_selection = {t['task_key']: True for t in valid_tasks}
-            st.session_state.select_all_state = True
-        
-        # Ensure filtering consistency: if new valid tasks appeared, track them
-        for t in valid_tasks:
-             if t['task_key'] not in st.session_state.task_selection:
-                 st.session_state.task_selection[t['task_key']] = True
-
-        # Callbacks for Sync Logic --------------------------------
-        def on_select_all_change():
-            """Called when 'Select All' is toggled."""
-            new_state = st.session_state.select_all_key
-            for t in valid_tasks:
-                st.session_state.task_selection[t['task_key']] = new_state
+    with col_analyze:
+        # Show warning if analysis was already run
+        if st.session_state['analysis_run_count'] > 0:
+            st.warning(f"⚠️ Analysis already run {st.session_state['analysis_run_count']} time(s). Re-running will incur additional AI costs.")
             
-            # Update the flag to match
-            st.session_state.select_all_state = new_state
-
-        def on_individual_change():
-            """Called when ANY individual task checkbox is toggled."""
-            # We need to scan all checkboxes to see if all are selected
-            # Streamlit 'key' writes directly to session state.
-            
-            current_selections = []
-            for t in valid_tasks:
-                # Read the session state key for this checkbox
-                key = f"sel_{t['task_key']}"
-                if key in st.session_state:
-                     val = st.session_state[key]
-                     st.session_state.task_selection[t['task_key']] = val
-                     current_selections.append(val)
-            
-            all_selected = all(current_selections) if current_selections else False
-            
-            # Update 'Select All' state visually without triggering its callback loop
-            st.session_state.select_all_state = all_selected
-            # We must also update the key binding for Select All if we want it to check/uncheck
-            # But changing 'select_all_key' might trigger its callback?
-            # Streamlit trick: Just update the value associated with the key?
-            # Actually, we can't easily update the specific 'select_all_key' widget state programmatically 
-            # while inside another callback unless we rerun.
-            # But the on_change triggers BEFORE this script reruns.
-            # So updating st.session_state.select_all_state (which is bound to 'value') should work on next render.
-        # ---------------------------------------------------------
-
-        # "Select All" Checkbox
-        # We bind 'value' to a state variable that we manually update.
-        st.checkbox(
-            "Select All Valid Tasks", 
-            value=st.session_state.select_all_state,
-            key="select_all_key",
-            on_change=on_select_all_change
-        )
-        
-        # 2. Compact Grid Layout (3 Columns)
-        cols = st.columns(3)
-        st.markdown("""<style>.stCheckbox { margin-bottom: -10px; }</style>""", unsafe_allow_html=True)
-        
-        selected_tasks_list = []
-        
-        for i, task in enumerate(valid_tasks):
-            col = cols[i % 3]
-            t_key = task['task_key']
-            
-            with col:
-                # Bind value to our tracking dict.
-                # Bind on_change to update the 'Select All' master checkbox.
-                is_selected = st.checkbox(
-                    f"**{t_key}** ({task['task_type']})",
-                    value=st.session_state.task_selection[t_key],
-                    key=f"sel_{t_key}",
-                    on_change=on_individual_change
-                )
-            
-            if is_selected:
-                selected_tasks_list.append(task)
-        
-        # Assign to variable expected by Step 3
-        selected_tasks = selected_tasks_list
-    
-    st.caption(f"Selected {len(selected_tasks)} / {len(valid_tasks)} tasks.")
-
-    # --- Step 3: Analysis & Validation (Combined) ---
-    if st.button("🚀 Run AI Lineage Analysis"):
-        if not selected_tasks:
-            st.warning("No tasks selected.")
+            col_confirm, col_cancel = st.columns(2)
+            with col_confirm:
+                run_analysis = st.button("🔄 Re-run Analysis", type="secondary")
+            with col_cancel:
+                if st.button("❌ Cancel"):
+                    st.info("Analysis cancelled. Using existing results.")
+                    run_analysis = False
         else:
-            with st.status("Running AI Analysis...", expanded=True) as status:
+            run_analysis = st.button("🤖 Analyze All Tasks", type="primary")
+        
+        if run_analysis:
+            st.session_state['analysis_run_count'] += 1
+
+            with st.status("Running AI Analysis on All Tasks...", expanded=True) as status:
                 agent = MappingAgent()
                 db_service = DatabricksService()
                 
-                results = {}
+                # Step 1: Build analysis groups
+                analysis_groups = {}  # {cache_key: [task_keys]}
+                task_to_cache_key = {}  # {task_key: cache_key}
+                
+                for task in st.session_state['job_tasks']:
+                    task_key = task['task_key']
+                    cache_key = get_cache_key(task)
+                    
+                    if cache_key not in analysis_groups:
+                        analysis_groups[cache_key] = []
+                    analysis_groups[cache_key].append(task_key)
+                    task_to_cache_key[task_key] = cache_key
+                
+                total_tasks = len(st.session_state['job_tasks'])
+                unique_sources = len(analysis_groups)
+                
+                st.write(f"📊 Analyzing **{unique_sources} unique code sources** for **{total_tasks} tasks**")
+                
+                # Step 2: Analyze each unique code source once
                 progress_bar = st.progress(0)
+                analyzed_count = 0
                 
-                for i, task in enumerate(selected_tasks):
-                    st.write(f"Analyzing `{task['task_key']}`...")
-                    code_context = db_service.get_task_code(task)
+                for cache_key, task_keys in analysis_groups.items():
+                    # Check if already cached
+                    if cache_key in st.session_state['analysis_cache']:
+                        st.write(f"✅ Using cached result for: {cache_key}")
+                        analyzed_count += 1
+                        progress_bar.progress(analyzed_count / unique_sources)
+                        continue
                     
-                    if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
-                        # Append params
-                        # Append params
-                        if job_params_input:
-                            current_meta = code_context.get("__metadata__", "")
-                            code_context["__metadata__"] = f"{current_meta}\nParameters: {job_params_input}"
+                    # Get representative task
+                    representative_task = next(t for t in st.session_state['job_tasks'] if t['task_key'] == task_keys[0])
+                    
+                    st.write(f"🔍 Analyzing: {cache_key} (used by {len(task_keys)} tasks)")
+                    
+                    try:
+                        code_context = db_service.get_task_code(representative_task)
                         
-                        # Analyze with Real-time Streaming
-                        st.markdown(f"**Analyzing {task['task_key']}...**")
-                        
-                        log_container = st.container(height=300)
-                        def stream_log(msg):
-                            log_container.write(msg)
+                        if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
+                            # Add job parameters
+                            if job_params_input:
+                                current_meta = code_context.get("__metadata__", "")
+                                code_context["__metadata__"] = f"{current_meta}\\nParameters: {job_params_input}"
                             
-                        mapping = agent.analyze_code(code_context, on_log=stream_log)
-                        
-                        # Store raw results (assets object list)
-                        results[task['task_key']] = {
-                            "assets": [a.model_dump() for a in mapping.assets],
-                            "trace": mapping.resolution_trace,
-                            "assets": [a.model_dump() for a in mapping.assets],
-                            "trace": mapping.resolution_trace,
-                            "token_stats": mapping.token_stats,
-                            "source_files": mapping.source_files
-                        }
-                    else:
-                        st.warning(f"Failed to get code for {task['task_key']}")
-                        results[task['task_key']] = {"assets": [], "trace": [], "token_stats": {}}
+                            # Analyze
+                            mapping = agent.analyze_code(code_context)
+                            
+                            # Cache result
+                            st.session_state['analysis_cache'][cache_key] = mapping
+                            st.write(f"  ✅ Found {len(mapping.assets)} assets")
+                        else:
+                            st.warning(f"  ⚠️ Could not fetch code for {cache_key}")
+                            st.session_state['analysis_cache'][cache_key] = None
                     
-                    progress_bar.progress((i + 1) / len(selected_tasks))
+                    except Exception as e:
+                        st.error(f"  ❌ Analysis failed: {e}")
+                        st.session_state['analysis_cache'][cache_key] = None
+                    
+                    analyzed_count += 1
+                    progress_bar.progress(analyzed_count / unique_sources)
                 
-                st.session_state['analysis_results'] = results
-                # Auto-expand the first task for better UX
-                if results:
-                    first_key = list(results.keys())[0]
-                    st.session_state['expanded_task'] = first_key
-                status.update(label="Analysis Complete!", state="complete", expanded=False)
+                # Step 3: Apply cached results to all tasks
+                st.write("\\n📝 Applying results to tasks...")
+                
+                for task in st.session_state['job_tasks']:
+                    task_key = task['task_key']
+                    cache_key = task_to_cache_key[task_key]
+                    mapping = st.session_state['analysis_cache'].get(cache_key)
+                    
+                    if mapping and mapping.assets:
+                        # Add task context to help differentiate
+                        sources = []
+                        targets = []
+                        
+                        for asset in mapping.assets:
+                            asset_dict = {
+                                'subtype': asset.subtype,
+                                'identifier': asset.identifier,
+                                'validation_status': '❔ Unchecked'
+                            }
+                            if asset.usage == "SOURCE":
+                                sources.append(asset_dict)
+                            elif asset.usage == "TARGET":
+                                targets.append(asset_dict)
+                        
+                        # Update session state
+                        st.session_state['task_data'][task_key]['sources'] = sources if sources else [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
+                        st.session_state['task_data'][task_key]['targets'] = targets if targets else [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
+                
+                status.update(label=f"✅ Analysis Complete! Processed {unique_sources} unique sources for {total_tasks} tasks.", state="complete", expanded=False)
+                st.rerun()
+    
+    with col_info:
+        st.info("💡 **Tip**: AI will intelligently cache shared wheel files to avoid redundant analysis.")
 
-# --- Sidebar Stats ---
-if st.session_state['analysis_results']:
-    total_tokens = sum([t.get("token_stats", {}).get("total_tokens", 0) for t in st.session_state['analysis_results'].values()])
-    st.sidebar.markdown("### 📊 Analysis Stats")
-    st.sidebar.metric("Total Tokens (Est.)", total_tokens)
-
-
-# --- Step 4: Collapsible Results View ---
-if st.session_state['analysis_results']:
-    st.markdown("### 3️⃣ Review & Edit Lineage")
-    st.info("Expand each task to review and edit the discovered assets. You can Add/Delete rows directly.")
+# --- Step 2: Manual Lineage Entry ---
+if st.session_state['job_tasks']:
+    st.markdown("### 2️⃣ Manual Lineage Entry")
+    st.info("Review AI-suggested lineage or add sources/targets manually. Use 🗑️ to remove irrelevant tasks.")
     
     final_manifest = {}
     
-    # Iterate over tasks
-    for task_key, data in st.session_state['analysis_results'].items():
-        # Collapsible View
-        with st.expander(f"📌 {task_key}", expanded=(task_key == st.session_state.get('expanded_task'))):
-            
-            # Prepare Data for Editor
-            current_assets = data.get("assets", [])
-            df = pd.DataFrame(current_assets)
-            
-            if df.empty:
-                df = pd.DataFrame(columns=["subtype", "identifier", "usage", "confidence", "asset_type", "validation_status"])
-            
-            # Ensure validation_status exists
-            if "validation_status" not in df.columns:
-                df["validation_status"] = "❔ Unchecked"
-
-            # Editor Configuration
-            edited_df = st.data_editor(
-                df,
-                num_rows="dynamic", # Allow Add/Delete
-                use_container_width=True,
-                key=f"editor_{task_key}",
-                column_config={
-                    "validation_status": st.column_config.TextColumn("Status", width="small", help="Result of validation check"),
-                    "subtype": st.column_config.SelectboxColumn(
-                        "Type",
-                        options=[
-                            "UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "JDBC_DB", 
-                            "ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", 
-                            "PARQUET_FILE", "CSV_FILE", "DELTA_PATH", "UNKNOWN"
-                        ],
-                        required=True,
-                        width="medium"
-                    ),
-                    "identifier": st.column_config.TextColumn(
-                        "Source/Target Name",
-                        required=True,
-                        width="large",
-                        help="Full path or table name"
-                    ),
-                    "usage": st.column_config.SelectboxColumn(
-                        "Usage",
-                        options=["SOURCE", "TARGET"],
-                        required=True,
-                        width="small"
-                    ),
-                    # Hide internal columns
-                    "asset_type": None, 
-                    "confidence": None,
-                    "evidence": None
-                },
-                column_order=["validation_status", "usage", "subtype", "identifier"],
-                on_change=set_active_task,
-                args=(task_key,)
-            )
-            
-            # Construct Manifest Chunk from *Edited* Data
-            sources = []
-            targets = []
-            
-            # Convert back to list of dicts for session state update (to persist edits)
-            updated_assets_list = edited_df.to_dict("records")
-            data["assets"] = updated_assets_list
-            
-            # Track assets for DQ selection
-            current_asset_names = []
-
-            for _, row in edited_df.iterrows():
-                asset_entry = {
-                    "name": row["identifier"],
-                    "type": row["subtype"]
-                }
-                if row["usage"] == "SOURCE":
-                    sources.append(asset_entry)
-                elif row["usage"] == "TARGET":
-                    targets.append(asset_entry)
+    for task in st.session_state['job_tasks']:
+        task_key = task['task_key']
+        initialize_task_data(task_key)
+        
+        # Collapsible view per task with delete button
+        col_expander, col_delete = st.columns([20, 1])
+        
+        with col_delete:
+            if st.button("🗑️", key=f"delete_{task_key}", help="Remove this task"):
+                # Track as excluded task
+                if task_key not in st.session_state['excluded_tasks']:
+                    st.session_state['excluded_tasks'].append(task_key)
                 
-                # Only offer DQ on Source/Target assets (ignore unknown/blank)
-                if row["identifier"]:
-                    current_asset_names.append(row["identifier"])
-            
-            # --- Data Quality Rules UI ---
-            st.markdown("#### 🛡️ Data Quality Rules")
-            
-            dq_col1, dq_col2 = st.columns([1, 2])
-            with dq_col1:
-                selected_asset_for_dq = st.selectbox(
-                    "Select Asset to Add Rules", 
-                    options=["Select Asset..."] + sorted(list(set(current_asset_names))),
-                    key=f"dq_sel_{task_key}",
+                # Remove from job_tasks
+                st.session_state['job_tasks'] = [
+                    t for t in st.session_state['job_tasks'] 
+                    if t['task_key'] != task_key
+                ]
+                # Clean up task data
+                if task_key in st.session_state['task_data']:
+                    del st.session_state['task_data'][task_key]
+                if task_key in st.session_state['dq_rules']:
+                    del st.session_state['dq_rules'][task_key]
+                st.rerun()
+        
+        with col_expander:
+            with st.expander(f"📌 {task_key} ({task['task_type']})", expanded=(task_key == st.session_state.get('expanded_task'))):
+                
+                # Sources Section
+                st.markdown("#### 📥 Sources")
+                sources_df = pd.DataFrame(st.session_state['task_data'][task_key]['sources'])
+                
+                edited_sources = st.data_editor(
+                    sources_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"sources_{task_key}",
+                    column_config={
+                        "validation_status": st.column_config.TextColumn("Status", width="small", help="Validation result"),
+                        "subtype": st.column_config.SelectboxColumn(
+                            "Type",
+                            options=[
+                                "UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "JDBC_DB", 
+                                "ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", 
+                                "PARQUET_FILE", "CSV_FILE", "DELTA_PATH", "UNKNOWN"
+                            ],
+                            required=True,
+                            width="medium"
+                        ),
+                        "identifier": st.column_config.TextColumn(
+                            "Source Name",
+                            required=True,
+                            width="large",
+                            help="Full path or table name"
+                        )
+                    },
+                    column_order=["validation_status", "subtype", "identifier"],
                     on_change=set_active_task,
                     args=(task_key,)
                 )
-            
-            with dq_col2:
-                if selected_asset_for_dq and selected_asset_for_dq != "Select Asset...":
-                    # --- 1. Add New Rule Form (Top Priority) ---
-                    st.markdown("##### ➕ Add New Rule")
-                    
-                    # Fetch Columns dynamic logic matches cache logic previously added
-                    asset_columns = ["*"]
-                    if selected_asset_for_dq in st.session_state['column_cache']:
-                        asset_columns.extend(st.session_state['column_cache'][selected_asset_for_dq])
-                    else:
-                        try:
-                            config_cols = DatabricksService().get_asset_columns(selected_asset_for_dq)
-                            if config_cols:
-                                st.session_state['column_cache'][selected_asset_for_dq] = config_cols
-                                asset_columns.extend(config_cols)
-                        except Exception:
-                            pass
+                
+                # Targets Section
+                st.markdown("#### 📤 Targets")
+                targets_df = pd.DataFrame(st.session_state['task_data'][task_key]['targets'])
+                
+                edited_targets = st.data_editor(
+                    targets_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"targets_{task_key}",
+                    column_config={
+                        "validation_status": st.column_config.TextColumn("Status", width="small", help="Validation result"),
+                        "subtype": st.column_config.SelectboxColumn(
+                            "Type",
+                            options=[
+                                "UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "JDBC_DB", 
+                                "ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", 
+                                "PARQUET_FILE", "CSV_FILE", "DELTA_PATH", "UNKNOWN"
+                            ],
+                            required=True,
+                            width="medium"
+                        ),
+                        "identifier": st.column_config.TextColumn(
+                            "Target Name",
+                            required=True,
+                            width="large",
+                            help="Full path or table name"
+                        )
+                    },
+                    column_order=["validation_status", "subtype", "identifier"],
+                    on_change=set_active_task,
+                    args=(task_key,)
+                )
+                
+                # Update session state with edited data
+                st.session_state['task_data'][task_key]['sources'] = edited_sources.to_dict('records')
+                st.session_state['task_data'][task_key]['targets'] = edited_targets.to_dict('records')
+                
+                # Collect all asset names for DQ rules
+                all_assets = []
+                for src in edited_sources.to_dict('records'):
+                    if src.get('identifier'):
+                        all_assets.append(src['identifier'])
+                for tgt in edited_targets.to_dict('records'):
+                    if tgt.get('identifier'):
+                        all_assets.append(tgt['identifier'])
+                
+                # --- Data Quality Rules UI ---
+                st.markdown("#### 🛡️ Data Quality Rules")
+                
+                dq_col1, dq_col2 = st.columns([1, 2])
+                with dq_col1:
+                    selected_asset_for_dq = st.selectbox(
+                        "Select Asset to Add Rules", 
+                        options=["Select Asset..."] + sorted(list(set(all_assets))),
+                        key=f"dq_sel_{task_key}",
+                        on_change=set_active_task,
+                        args=(task_key,)
+                    )
+                
+                with dq_col2:
+                    if selected_asset_for_dq and selected_asset_for_dq != "Select Asset...":
+                        st.markdown("##### ➕ Add New Rule")
+                        
+                        # Fetch columns
+                        asset_columns = ["*"]
+                        if selected_asset_for_dq in st.session_state['column_cache']:
+                            asset_columns.extend(st.session_state['column_cache'][selected_asset_for_dq])
+                        else:
+                            try:
+                                config_cols = DatabricksService().get_asset_columns(selected_asset_for_dq)
+                                if config_cols:
+                                    st.session_state['column_cache'][selected_asset_for_dq] = config_cols
+                                    asset_columns.extend(config_cols)
+                            except Exception:
+                                pass
 
-                    # with st.form(key=f"add_rule_form_{task_key}_{selected_asset_for_dq}"):
-                    fr_c1, fr_c2, fr_c3 = st.columns(3)
-                    r_cols = fr_c1.multiselect("Column Name(s)", options=asset_columns, help="Select one or more columns.", default=None, key=f"dqc_{task_key}_{selected_asset_for_dq}")
-                    r_type = fr_c2.selectbox("Check Type", [
-                        "not_null", "unique", "row_count", 
-                        "range", "accepted_values", "regex"
-                    ], key=f"dqt_{task_key}_{selected_asset_for_dq}")
-                    
-                    help_text = "Value/Param"
-                    if r_type == "range": help_text = "Format: min-max (e.g. 0-100)"
-                    elif r_type == "accepted_values": help_text = "Format: A,B,C"
-                    elif r_type == "regex": help_text = "Regular Expression Pattern"
-                    elif r_type == "row_count": help_text = "Minimum Row Count (Integer)"
-                    elif r_type == "unique" or r_type == "not_null": help_text = "Leave empty (Not needed)"
+                        fr_c1, fr_c2, fr_c3 = st.columns(3)
+                        r_cols = fr_c1.multiselect("Column Name(s)", options=asset_columns, help="Select one or more columns.", default=None, key=f"dqc_{task_key}_{selected_asset_for_dq}")
+                        r_type = fr_c2.selectbox("Check Type", [
+                            "not_null", "unique", "row_count", 
+                            "range", "accepted_values", "regex"
+                        ], key=f"dqt_{task_key}_{selected_asset_for_dq}")
+                        
+                        help_text = "Value/Param"
+                        if r_type == "range": help_text = "Format: min-max (e.g. 0-100)"
+                        elif r_type == "accepted_values": help_text = "Format: A,B,C"
+                        elif r_type == "regex": help_text = "Regular Expression Pattern"
+                        elif r_type == "row_count": help_text = "Minimum Row Count (Integer)"
+                        elif r_type == "unique" or r_type == "not_null": help_text = "Leave empty (Not needed)"
 
-                    r_val = fr_c3.text_input("Value/Param", help=help_text, placeholder=help_text, key=f"dqv_{task_key}_{selected_asset_for_dq}")
-                    
-                    # Use standard button, not form_submit_button
-                    if st.button("Save Rule", key=f"btn_save_{task_key}_{selected_asset_for_dq}"):
+                        r_val = fr_c3.text_input("Value/Param", help=help_text, placeholder=help_text, key=f"dqv_{task_key}_{selected_asset_for_dq}")
+                        
+                        if st.button("Save Rule", key=f"btn_save_{task_key}_{selected_asset_for_dq}"):
                             if not r_cols:
                                 st.error("❌ Please select at least one column.")
                             else:
@@ -449,136 +517,228 @@ if st.session_state['analysis_results']:
                                 st.session_state['expanded_task'] = task_key
                                 st.rerun()
 
-                    # --- 2. Show Existing Rules (Scrollable List) ---
-                    current_rules = st.session_state['dq_rules'].get(selected_asset_for_dq, [])
-                    rules_count = len(current_rules)
-                    
-                    st.markdown(f"**📜 Current Rules ({rules_count})**")
-                    with st.container(height=200):
-                        if current_rules:
-                            for ridx, rule in enumerate(current_rules):
-                                r_col_a, r_col_b = st.columns([5, 1])
-                                r_col_a.info(f"**{rule.get('column','*')}** | `{rule['type']}` | {rule.get('value', '')}")
-                                if r_col_b.button("🗑️", key=f"del_rule_{task_key}_{selected_asset_for_dq}_{ridx}"):
-                                    st.session_state['dq_rules'][selected_asset_for_dq].pop(ridx)
-                                    st.session_state['expanded_task'] = task_key
-                                    st.rerun()
-                        else:
-                            st.caption("No rules configured for this asset yet.")
+                        # Show existing rules
+                        current_rules = st.session_state['dq_rules'].get(selected_asset_for_dq, [])
+                        rules_count = len(current_rules)
+                        
+                        st.markdown(f"**📜 Current Rules ({rules_count})**")
+                        with st.container(height=200):
+                            if current_rules:
+                                for ridx, rule in enumerate(current_rules):
+                                    r_col_a, r_col_b = st.columns([5, 1])
+                                    r_col_a.info(f"**{rule.get('column','*')}** | `{rule['type']}` | {rule.get('value', '')}")
+                                    if r_col_b.button("🗑️", key=f"del_rule_{task_key}_{selected_asset_for_dq}_{ridx}"):
+                                        st.session_state['dq_rules'][selected_asset_for_dq].pop(ridx)
+                                        st.session_state['expanded_task'] = task_key
+                                        st.rerun()
+                            else:
+                                st.caption("No rules configured for this asset yet.")
 
-            
-            # Persist to Manifest
-            dq_section_manifest = {}
-            for asset_name in current_asset_names:
-                if asset_name in st.session_state['dq_rules'] and st.session_state['dq_rules'][asset_name]:
-                    dq_section_manifest[asset_name] = st.session_state['dq_rules'][asset_name]
+                # Build manifest entry for this task
+                sources_manifest = []
+                targets_manifest = []
+                
+                for src in edited_sources.to_dict('records'):
+                    if src.get('identifier'):
+                        sources_manifest.append({
+                            "name": src['identifier'],
+                            "type": src.get('subtype', 'UNKNOWN')
+                        })
+                
+                for tgt in edited_targets.to_dict('records'):
+                    if tgt.get('identifier'):
+                        targets_manifest.append({
+                            "name": tgt['identifier'],
+                            "type": tgt.get('subtype', 'UNKNOWN')
+                        })
+                
+                # DQ rules for this task
+                dq_section_manifest = {}
+                for asset_name in all_assets:
+                    if asset_name in st.session_state['dq_rules'] and st.session_state['dq_rules'][asset_name]:
+                        dq_section_manifest[asset_name] = st.session_state['dq_rules'][asset_name]
 
-            final_manifest[task_key] = {
-                "sources": sources,
-                "targets": targets,
-                "dq_rules": dq_section_manifest,
-                "source_files": data.get("source_files", []),
-                "code_content": data.get("source_code_snapshot", {}) 
-            }
+                final_manifest[task_key] = {
+                    "sources": sources_manifest,
+                    "targets": targets_manifest,
+                    "dq_rules": dq_section_manifest
+                }
 
-    # --- Validate & Save Button (Global) ---
+    # --- Step 3: Validate & Save ---
     st.markdown("---")
+    st.markdown("### 3️⃣ Validate & Save")
     
-    col_btn1, col_btn2 = st.columns([1, 4])
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
+    
     with col_btn1:
-        if st.button("🔎 Validate & Save", type="primary"):
+        if st.button("🔎 Validate Assets", type="secondary"):
             validation_error_count = 0
             
             with st.status("Validating Assets...", expanded=True) as status:
-                # 1. Collect all assets to validate
+                # Collect all assets
                 all_assets_to_validate = []
-                count = 0
-                for t_key, t_data in st.session_state['analysis_results'].items():
-                    for a in t_data.get("assets", []):
-                        all_assets_to_validate.append(a)
-                        count += 1
+                for t_key, t_data in st.session_state['task_data'].items():
+                    for src in t_data.get('sources', []):
+                        if src.get('identifier'):
+                            all_assets_to_validate.append(src)
+                    for tgt in t_data.get('targets', []):
+                        if tgt.get('identifier'):
+                            all_assets_to_validate.append(tgt)
                 
-                st.write(f"Validating {count} assets against Databricks...")
+                st.write(f"Validating {len(all_assets_to_validate)} assets...")
                 
-                # 2. Call Backend
+                # Call backend
                 db_service = DatabricksService()
                 validation_results = db_service.validate_assets(all_assets_to_validate)
                 
-                # 3. Update Status in Session State
+                # Update status
                 valid_count = 0
                 invalid_count = 0
                 
-                for t_key, t_data in st.session_state['analysis_results'].items():
-                    for a in t_data.get("assets", []):
-                         ident = a.get("identifier")
-                         status_msg = validation_results.get(ident, "❔ Unchecked")
-                         a["validation_status"] = status_msg
-                         
-                         if "✅" in status_msg: 
-                             valid_count += 1
-                         else:
-                             # Strict Mode: Any warning (⚠️) or error (❌) is an issue
-                             invalid_count += 1
+                for t_key, t_data in st.session_state['task_data'].items():
+                    for asset in t_data.get('sources', []) + t_data.get('targets', []):
+                        ident = asset.get('identifier')
+                        if ident:
+                            status_msg = validation_results.get(ident, "❔ Unchecked")
+                            asset['validation_status'] = status_msg
+                            
+                            if "✅" in status_msg: 
+                                valid_count += 1
+                            else:
+                                invalid_count += 1
                 
                 validation_error_count = invalid_count
                 status.update(label=f"Done! {valid_count} Valid, {invalid_count} Issues.", state="complete", expanded=False)
             
-            # Persistent Alert
             if validation_error_count > 0:
-                st.error(f"⚠️ Validation finished with **{validation_error_count} issues**. Please review the items marked with ❌ above before saving.")
-                st.warning("You can fix the identifiers directly in the tables above and click 'Validate & Save' again.")
+                st.error(f"⚠️ Validation found **{validation_error_count} issues**. Please review before submitting.")
             else:
                 st.success("✅ All assets validated successfully!")
-                
-            # 5. Save Manifest (Local)
-            output_path = "manifest.json"
-            if validation_error_count == 0:
-                with open(output_path, "w") as f:
-                    json.dump(final_manifest, f, indent=2)
-                
-                st.success(f"File saved to `{output_path}`")
-                
-                # 6. Save to Delta Table (if configured)
-                if manifest_table:
-                     with st.spinner(f"Saving to manifest table `{manifest_table}`..."):
-                        save_res = db_service.save_manifest_to_table(
-                             table_name=manifest_table,
-                             manifest=final_manifest,
-                             job_id=job_id_input if job_id_input else "unknown",
-                             version=manifest_version_input
-                        )
-                        if "✅" in save_res:
-                            st.toast(save_res, icon="✅")
-                            # Append to persisted success message
-                            st.session_state['last_table_msg'] = save_res
-                        else:
-                            st.error(save_res)
             
-            # 5. Rerun to show updated statuses in the tables (using a brief pause or just rerun)
-            # Rerun to update table statuses, using session state to persist messages.
-            
-            st.session_state['last_validation_msg'] = {
-                "type": "error" if validation_error_count > 0 else "success",
-                "count": validation_error_count
-            }
             st.rerun()
-
-# Display Persistent Message if exists
-if 'last_validation_msg' in st.session_state:
-    msg = st.session_state['last_validation_msg']
-    if msg['type'] == 'error':
-        st.error(f"⚠️ Validation finished with **{msg['count']} issues**. Please review the items marked with ❌ above.")
-    else:
-        st.success("✅ All assets validated successfully! Manifest saved.")
-        if 'last_table_msg' in st.session_state:
-             st.info(st.session_state['last_table_msg'])
-             del st.session_state['last_table_msg']
     
-    # Clear it so it doesn't stay forever if they change something
-    # But we want it to stay until next action? Let's leave it.
-    del st.session_state['last_validation_msg']
+    with col_btn2:
+        if st.button("💾 Save Draft"):
+            # Add metadata to manifest
+            final_manifest['_metadata'] = {
+                'excluded_tasks': st.session_state.get('excluded_tasks', []),
+                'job_task_snapshot': st.session_state.get('job_task_snapshot', [])
+            }
+            
+            output_path = "manifest.json"
+            with open(output_path, "w") as f:
+                json.dump(final_manifest, f, indent=2)
+            
+            st.success(f"✅ Draft saved to `{output_path}`")
+            
+            # Save to Delta with DRAFT status
+            if manifest_table:
+                with st.spinner(f"Saving draft to `{manifest_table}`..."):
+                    db_service = DatabricksService()
+                    save_res = db_service.save_manifest_to_table(
+                        table_name=manifest_table,
+                        manifest=final_manifest,
+                        job_id=job_id_input if job_id_input else "unknown",
+                        version=manifest_version_input,
+                        status="DRAFT"
+                    )
+                    if "✅" in save_res:
+                        st.toast(save_res, icon="✅")
+                    else:
+                        st.error(save_res)
+    
+    with col_btn3:
+        if st.button("✅ Submit", type="primary"):
+            # Step 1: Validate field completeness
+            validation_errors = validate_manifest_completeness()
+            
+            if validation_errors:
+                # Show error summary
+                error_count = sum(len(errors) for errors in validation_errors.values())
+                st.error(f"❌ Cannot submit: {len(validation_errors)} task(s) have incomplete data ({error_count} issues)")
+                
+                # Display errors
+                with st.expander("📋 Validation Errors", expanded=True):
+                    for task_key, errors in validation_errors.items():
+                        st.markdown(f"**📌 {task_key}** ⚠️")
+                        for error in errors:
+                            st.markdown(f"  - {error}")
+                
+                # Auto-expand tasks with errors
+                if validation_errors:
+                    first_error_task = list(validation_errors.keys())[0]
+                    st.session_state['expanded_task'] = first_error_task
+                    st.session_state['validation_errors'] = validation_errors
+                    st.rerun()
+            
+            else:
+                # Step 2: Check if all assets are validated
+                has_unvalidated = False
+                for t_key, t_data in st.session_state['task_data'].items():
+                    for asset in t_data.get('sources', []) + t_data.get('targets', []):
+                        if asset.get('identifier') and "❔" in asset.get('validation_status', ''):
+                            has_unvalidated = True
+                            break
+                
+                if has_unvalidated:
+                    st.error("❌ Please validate all assets before submitting.")
+                else:
+                    # Add metadata to manifest
+                    final_manifest['_metadata'] = {
+                        'excluded_tasks': st.session_state.get('excluded_tasks', []),
+                        'job_task_snapshot': st.session_state.get('job_task_snapshot', [])
+                    }
+                    
+                    # Step 3: Check for changes if manifest was loaded
+                    has_changes = True
+                    if st.session_state.get('loaded_manifest_version') and st.session_state.get('existing_manifest'):
+                        loaded_manifest = st.session_state['existing_manifest']['manifest_data']
+                        
+                        # Compare manifests (excluding _metadata for comparison)
+                        current_manifest_copy = {k: v for k, v in final_manifest.items() if k != '_metadata'}
+                        loaded_manifest_copy = {k: v for k, v in loaded_manifest.items() if k != '_metadata'}
+                        
+                        if current_manifest_copy == loaded_manifest_copy:
+                            has_changes = False
+                    
+                    if not has_changes:
+                        # No changes detected
+                        st.info(f"""
+ℹ️ **No changes detected** since v{st.session_state.get('loaded_manifest_version')}.
 
-    with st.expander("View Generated JSON"):
+Nothing to submit. The manifest is identical to the loaded version.
+                        """)
+                        
+                        # Still save local JSON
+                        output_path = "manifest.json"
+                        with open(output_path, "w") as f:
+                            json.dump(final_manifest, f, indent=2)
+                        st.caption(f"💾 Local copy saved to `{output_path}`")
+                    
+                    else:
+                        # Changes detected, proceed with submit
+                        output_path = "manifest.json"
+                        with open(output_path, "w") as f:
+                            json.dump(final_manifest, f, indent=2)
+                        
+                        st.success(f"✅ Manifest submitted and saved to `{output_path}`")
+                        
+                        # Save to Delta with SUBMITTED status
+                        if manifest_table:
+                            with st.spinner(f"Submitting to `{manifest_table}`..."):
+                                db_service = DatabricksService()
+                                save_res = db_service.save_manifest_to_table(
+                                    table_name=manifest_table,
+                                    manifest=final_manifest,
+                                    job_id=job_id_input if job_id_input else "unknown",
+                                    version=manifest_version_input,
+                                    status="SUBMITTED"
+                                )
+                                if "✅" in save_res:
+                                    st.toast(save_res, icon="✅")
+                                else:
+                                    st.error(save_res)
+
+    # View JSON
+    with st.expander("View Generated Manifest JSON"):
         st.json(final_manifest)
-
-

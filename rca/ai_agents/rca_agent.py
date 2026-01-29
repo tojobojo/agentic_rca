@@ -344,6 +344,7 @@ Please investigate why this step behaved anomalously.
                 result = await Runner.run(
                     self.agent,
                     prompt,
+                    max_turns=20  # Increased from default 10 to allow more investigation
                 )
                 
                 final_report = result.final_output

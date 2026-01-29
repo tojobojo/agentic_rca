@@ -51,17 +51,46 @@ graph TD
         Decision -->|Yes| RCAAgent["RCA Agent (LLM)"]
         Decision -->|No| Report["Report with Metrics"]
 
+        subgraph "LLM Configuration Layer"
+            LLMConfig["ModelSettings Manager"]
+            LLMConfig -->|Config| RCAAgent
+            LLMConfig -->|DATABRICKS_API_BASE| LiteLLM["LiteLLM Integration"]
+            LiteLLM -->|Serving Endpoints| DBModel["Databricks Foundation Models"]
+        end
+
         subgraph "Agentic Investigation Loop"
             RCAAgent -->|Tool| SQL["Spark SQL"]
             RCAAgent -->|Tool| DeltaHist["Delta History"]
             RCAAgent -->|Tool| Stats["Null / Distinct / Join Stats"]
             RCAAgent -->|Tool| Schema["Table & Schema Metadata"]
+            
+            SQL -.->|Error Handling| ErrorHandler["Graceful Degradation"]
+            DeltaHist -.->|Error Handling| ErrorHandler
+            Stats -.->|Error Handling| ErrorHandler
+            Schema -.->|Error Handling| ErrorHandler
+            
+            ErrorHandler -.->|Retry Logic| RCAAgent
         end
 
-        RCAAgent --> Report
+        RCAAgent -->|Max 20 Turns| Report
         Telemetry --> Report
     end
+    
+    subgraph "UI Validation Tool (Streamlit)"
+        UIUser["Data Engineer"] --> StreamlitUI["Streamlit Interface"]
+        StreamlitUI --> FilterAgent["File Filter Agent"]
+        FilterAgent --> ExtractAgent["Lineage Extraction Agent"]
+        ExtractAgent --> ManifestGen["Manifest Generator"]
+        StreamlitUI --> DQEditor["DQ Rules Editor"]
+        DQEditor -->|Schema-Aware| ManifestGen
+        ManifestGen -->|Save| ManifestDelta[("Delta: rca_manifest_log")]
+        ManifestGen -->|Token Stats| TokenTracker["Token Usage Monitor"]
+        
+        LLMConfig -.->|Shared Config| FilterAgent
+        LLMConfig -.->|Shared Config| ExtractAgent
+    end
 ```
+
 
 ---
 
@@ -309,12 +338,149 @@ Performance metrics included in final report:
 
 ---
 
+## 8. LLM Configuration Management
+
+### Role
+
+The **Model Orchestrator**. Manages LLM settings and credentials for AI-powered investigation.
+
+### Components
+
+#### ModelSettings Standardization
+- Uses `ModelSettings` class from `agents` library across all agents
+- Centralizes temperature, max_tokens, and timeout configuration
+- Ensures consistency between RCA Agent and UI Validation Tool
+
+#### LiteLLM Integration
+- Automatic configuration of `DATABRICKS_API_BASE` with `/serving-endpoints` suffix
+- Graceful initialization with try-except error handling
+- Supports Databricks Foundation Model serving endpoints
+
+#### Configuration Validation
+- Explicit checks for `databricks-sdk` installation
+- Clear error messages for missing credentials
+- Prevents initialization failures from crashing the system
+
+### Agent Settings
+
+```python
+model_settings = ModelSettings(
+    temperature=0.1,      # Low for deterministic analysis
+    max_tokens=10000,     # Sufficient for detailed reports
+    timeout=60,           # 60s timeout for LLM calls
+    include_usage=True    # Track token consumption
+)
+```
+
+### Max Turns Configuration
+- RCA Agent: 20 turns (increased from default 10)
+- Allows thorough investigation with multiple tool calls
+- Prevents premature termination during complex analysis
+
+---
+
+## 9. Error Handling & Resilience
+
+### Role
+
+The **Safety Net**. Ensures system stability despite missing data or failed operations.
+
+### Strategies
+
+#### Graceful Degradation
+- Tools return error messages instead of crashing
+- Agent continues investigation with partial data
+- Missing tables handled as investigation clues
+
+#### Retry Logic
+- LLM calls: 3 retries with exponential backoff
+- Configurable retry delay (default 2s)
+- Detailed error logging with stack traces
+
+#### Validation
+- Pydantic models validate all inputs
+- Configuration errors caught at startup
+- Clear, actionable error messages
+
+### Example Error Handling
+
+```python
+try:
+    if self.databricks_token:
+        self.model = LitellmModel(
+            model=self.llm_model,
+            api_key=self.databricks_token
+        )
+    else:
+        logger.warning("DATABRICKS_TOKEN missing. LitellmModel not initialized.")
+        self.model = None
+except Exception as e:
+    logger.error(f"Failed to initialize LitellmModel: {e}")
+    self.model = None
+```
+
+---
+
+## 10. UI Validation Tool
+
+### Role
+
+The **Interactive Analyzer**. Provides a Streamlit-based interface for lineage analysis and data quality rule management.
+
+### Features
+
+#### AI-Powered Lineage Extraction
+- Two-agent pipeline: File filtering → Lineage extraction
+- Analyzes notebook/SQL code to identify table dependencies
+- Generates structured lineage manifests with source/target mappings
+
+#### Data Quality Rules Management
+- Schema-aware column selection with dynamic dropdown
+- Real-time validation feedback
+- Support for multiple check types:
+  - Null checks
+  - Uniqueness validation
+  - Freshness monitoring
+  - Custom SQL expressions
+
+#### Manifest Persistence
+- Saves to local JSON and Databricks Delta table
+- Includes token usage statistics
+- Tracks source files and logic summaries
+
+### Architecture
+
+```mermaid
+graph LR
+    User[User] --> UI[Streamlit UI]
+    UI --> Filter[File Filter Agent]
+    Filter --> Extract[Lineage Extraction Agent]
+    Extract --> Manifest[Manifest JSON]
+    UI --> DQ[DQ Rules Editor]
+    DQ --> Manifest
+    Manifest --> Delta[(Delta Table)]
+```
+
+### Configuration
+
+Uses same `ModelSettings` as RCA system for consistency:
+- Shared LLM configuration
+- Unified error handling
+- Common Databricks authentication
+
+---
+
 ## Key Benefits
 
-- Databricks-first and UC-native
-- Execution-aware RCA
-- Scalable and cost-efficient
-- Evidence-backed, explainable AI
+- **Databricks-Native**: Fully integrated with Unity Catalog, Delta Lake, and Jobs APIs
+- **Execution-Aware RCA**: Analyzes what actually ran, not static code
+- **Scalable & Cost-Efficient**: Two-phase architecture separates collection from investigation
+- **Evidence-Backed AI**: LLM hypotheses validated with real data queries
+- **Robust Error Handling**: Graceful degradation with comprehensive retry logic
+- **Standardized LLM Config**: Consistent ModelSettings across all agents
+- **Interactive UI**: Streamlit tool for lineage analysis and DQ rule management
+- **Performance Tracking**: Built-in telemetry for optimization insights
+- **Token Usage Monitoring**: Track LLM costs per analysis
 
 ---
 
