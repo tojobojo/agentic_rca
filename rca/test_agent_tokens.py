@@ -1,11 +1,7 @@
 import logging
 import asyncio
 import os
-import sys
 from dotenv import load_dotenv
-
-# Ensure we can import from local modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 1. Setup Environment & Patching
 # These MUST be set before importing LitellmModel if not already handling it globally
@@ -45,11 +41,7 @@ async def run_test():
         model=config.model,
         instructions="You are a helpful assistant. value brevity.",
         tools=[],  # No tools needed for this test
-        model_settings={
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-            "timeout": config.llm_timeout
-        }
+        model_settings=config.model_settings
     )
     
     prompt = "Hello! Please tell me a very short joke about data engineering."
@@ -67,18 +59,21 @@ async def run_test():
         
         # 5. Inspect Token Usage
         # The Runner returns a RunResult which should contain usage info if supported by the model/library
-        if hasattr(result, "usage"):
-            usage = result.usage
+        if hasattr(result, "context_wrapper") and hasattr(result.context_wrapper, "usage"):
+            usage = result.context_wrapper.usage
             logger.info("TOKEN USAGE METRICS:")
-            logger.info(f"  - Prompt Tokens: {usage.prompt_tokens}")
-            logger.info(f"  - Completion Tokens: {usage.completion_tokens}")
-            logger.info(f"  - Total Tokens: {usage.total_tokens}")
+            logger.info(f"  - Requests: {getattr(usage, 'requests', 0)}")
+            logger.info(f"  - Input Tokens: {getattr(usage, 'input_tokens', 0)}")
+            logger.info(f"  - Output Tokens: {getattr(usage, 'output_tokens', 0)}")
+            logger.info(f"  - Total Tokens: {getattr(usage, 'total_tokens', 0)}")
             
             # Additional cost calculation could go here if price per token is known
         else:
-            logger.warning("Usage metrics not found in RunResult object.")
+            logger.warning("Usage metrics not found in context_wrapper object.")
             # Debugging: Print available attributes
             logger.info(f"Available attributes on result: {dir(result)}")
+            if hasattr(result, "context_wrapper"):
+                logger.info(f"Context Wrapper Attributes: {dir(result.context_wrapper)}")
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")

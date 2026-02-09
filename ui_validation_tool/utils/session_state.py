@@ -25,6 +25,30 @@ def initialize_session_state():
     if 'validation_errors' not in st.session_state:
         st.session_state['validation_errors'] = {}
 
+    # Analysis state
+    if 'analysis_run_count' not in st.session_state:
+        st.session_state['analysis_run_count'] = 0
+    if 'analysis_running' not in st.session_state:
+        st.session_state['analysis_running'] = False
+    if 'analysis_output' not in st.session_state:
+        st.session_state['analysis_output'] = None
+    if 'trigger_analysis' not in st.session_state:
+        st.session_state['trigger_analysis'] = False
+    if 'confirm_rerun' not in st.session_state:
+        st.session_state['confirm_rerun'] = False
+    if 'last_completed_run' not in st.session_state:
+        st.session_state['last_completed_run'] = 0
+
+    # Validation state
+    if 'trigger_validation' not in st.session_state:
+        st.session_state['trigger_validation'] = False
+    if 'validation_result' not in st.session_state:
+        st.session_state['validation_result'] = None
+    if 'save_submit_message' not in st.session_state:
+        st.session_state['save_submit_message'] = None
+    if 'validation_cache' not in st.session_state:
+        st.session_state['validation_cache'] = {}   
+
 
 def set_active_task(task_key):
     """Callback to keep target task expanded on interaction."""

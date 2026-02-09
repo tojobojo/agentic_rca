@@ -17,9 +17,11 @@ class AssetValidator:
     def validate_assets(self, assets: List[Dict[str, Any]]) -> Dict[str, str]:
         """
         Validates the existence of the provided assets.
-        Returns a dict mapping Identifier -> Status Message (e.g. "✅ Exists", "❌ Not Found", "⚠️ External").
+        Returns a dict mapping composite key (Identifier + Subtype) -> Status Message (e.g. "✅ Exists", "❌ Not Found", "⚠️ External").
         """
         results = {}
+
+        logger.info(f"Validating {len(assets)} assets...")
         
         for asset in assets:
             ident = asset.get("identifier")
@@ -28,6 +30,9 @@ class AssetValidator:
             if not ident:
                 continue
 
+            # Use composite key to allow same idenfier with different subtypes
+            composite_key = f"{ident} ({subtype})"
+
             try:
                 # 1. Unity Catalog / Hive Tables
                 if subtype in ["UNITY_CATALOG_TABLE", "HIVE_METASTORE_TABLE", "GENERIC_TABLE"] or "TABLE" in subtype:
@@ -35,13 +40,13 @@ class AssetValidator:
                         table_info = self.client.tables.get(ident)
                         t_type = str(table_info.table_type).split('.')[-1] if table_info.table_type else "UNKNOWN"
                         t_fmt = str(table_info.data_source_format).split('.')[-1] if table_info.data_source_format else "UNKNOWN"
-                        results[ident] = f"✅ Exists ({t_type}, {t_fmt})"
+                        results[composite_key] = f"✅ Exists ({t_type}, {t_fmt})"
                     except Exception as e:
                         err_str = str(e)
                         if "NOT_FOUND" in err_str or "does not exist" in err_str.lower():
-                            results[ident] = "❌ Not Found"
+                            results[composite_key] = "❌ Not Found"
                         else:
-                            results[ident] = f"⚠️ Check Failed: {str(e)}"
+                            results[composite_key] = f"⚠️ Check Failed: {str(e)}"
 
                 # 2. Files / Paths
                 elif subtype in ["ADLS", "S3", "GCS", "DBFS", "LOCAL_FILE", "PARQUET_FILE", "CSV_FILE", "DELTA_PATH"] or "FILE" in subtype:
@@ -49,22 +54,22 @@ class AssetValidator:
                          try:
                              check_path = ident if ident.startswith("dbfs:") else f"dbfs:{ident}"
                              self.client.dbfs.get_status(check_path)
-                             results[ident] = "✅ Exists"
+                             results[composite_key] = "✅ Exists"
                          except Exception as e:
                              if "RESOURCE_DOES_NOT_EXIST" in str(e):
-                                 results[ident] = "❌ Not Found"
+                                 results[composite_key] = "❌ Not Found"
                              else:
-                                 results[ident] = f"⚠️ Error: {str(e)[:30]}"
+                                 results[composite_key] = f"⚠️ Error: {str(e)[:30]}"
 
                     elif ident.startswith("/Volumes") or ident.startswith("/Workspace"):
                         try:
                             self.client.files.get_metadata(ident)
-                            results[ident] = "✅ Exists"
+                            results[composite_key] = "✅ Exists"
                         except Exception as e:
                              if "NOT_FOUND" in str(e):
-                                 results[ident] = "❌ Not Found"
+                                 results[composite_key] = "❌ Not Found"
                              else:
-                                 results[ident] = f"⚠️ Error: {str(e)[:30]}"
+                                 results[composite_key] = f"⚠️ Error: {str(e)[:30]}"
                     
                     elif "abfss" in ident or "s3" in ident:
                         spark = self._get_spark()
@@ -74,27 +79,30 @@ class AssetValidator:
                                 if res_df:
                                     row = res_df[0].asDict()
                                     fmt = row.get("format", "UNKNOWN").upper()
-                                    results[ident] = f"✅ Exists ({fmt})"
+                                    results[composite_key] = f"✅ Exists ({fmt})"
                                 else:
-                                    results[ident] = "❌ Not Found (Empty Detail)"
+                                    results[composite_key] = "❌ Not Found (Empty Detail)"
                             except Exception as e:
                                 err = str(e)
                                 if "Path does not exist" in err or "FileNotFoundException" in err:
-                                    results[ident] = "❌ Not Found"
+                                    results[composite_key] = "❌ Not Found"
                                 else:
-                                    results[ident] = f"⚠️ Spark Error: {err[:40]}..."
+                                    results[composite_key] = f"⚠️ Spark Error: {err[:40]}..."
                         else:
-                             results[ident] = "⚠️ Skipped (No Spark)"
+                             results[composite_key] = "⚠️ Skipped (No Spark)"
                     
                     else:
-                        results[ident] = "❔ Unchecked"
+                        results[composite_key] = "❌ Invalid"
                 
                 else:
-                    results[ident] = "❔ Unchecked Type"
+                    results[composite_key] = "❔ Unchecked Type"
 
             except Exception as e:
-                results[ident] = f"⚠️ Error: {str(e)}"
+                results[composite_key] = f"⚠️ Error: {str(e)}"
         
+        logger.info("Validation results: %s", results)
+        logger.info("Asset validation completed.")
+
         return results
 
     def get_asset_columns(self, identifier: str) -> List[str]:
