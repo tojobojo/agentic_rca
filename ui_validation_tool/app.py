@@ -83,51 +83,51 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
     if st.button("Fetch Job"):
         if job_id_input:
             with st.spinner("Fetching Job Details..."):
-                            try:
-                                db_service = DatabricksService()
-                                tasks = db_service.get_job_tasks(int(job_id_input))
+                try:
+                    db_service = DatabricksService()
+                    tasks = db_service.get_job_tasks(int(job_id_input))
 
-                                # Filter out unknown task types
-                                valid_tasks = [
-                                    t for t in tasks
-                                    if t.get('task_type') and t['task_type'].lower() != "unknown"
-                                ]
+                    # Filter out unknown task types
+                    valid_tasks = [
+                        t for t in tasks
+                        if t.get('task_type') and t['task_type'].lower() != "unknown"
+                    ]
 
-                                st.session_state['job_tasks'] = valid_tasks
-                                st.session_state['job_task_snapshot'] = [t['task_key'] for t in valid_tasks]
+                    st.session_state['job_tasks'] = valid_tasks
+                    st.session_state['job_task_snapshot'] = [t['task_key'] for t in valid_tasks]
 
-                                # Initialize task data for all tasks
-                                for task in valid_tasks:
-                                    initialize_task_data(task['task_key'])
+                    # Initialize task data for all tasks
+                    for task in valid_tasks:
+                        initialize_task_data(task['task_key'])
 
-                                # Auto-expand first task
-                                if valid_tasks:
-                                    st.session_state['expanded_task'] = valid_tasks[0]['task_key']
+                    # Auto-expand first task
+                    if valid_tasks:
+                        st.session_state['expanded_task'] = valid_tasks[0]['task_key']
 
-                                # Clear analysis cache and counter on new job fetch
-                                st.session_state['analysis_cache'] = []
-                                st.session_state['analysis_run_count'] = 0
-                                st.session_state['excluded_tasks'] = []
-                                st.session_state['loaded_manifest_version'] = None
-                                st.session_state['validation_result'] = None  # Clear validation result
-                                st.session_state['analysis_output'] = None    # Clear analysis output
-                                st.session_state['validation_cache'] = {}     # Clear validation cache
+                    # Clear analysis cache and counter on new job fetch
+                    st.session_state['analysis_cache'] = []
+                    st.session_state['analysis_run_count'] = 0
+                    st.session_state['excluded_tasks'] = []
+                    st.session_state['loaded_manifest_version'] = None
+                    st.session_state['validation_result'] = None  # Clear validation result
+                    st.session_state['analysis_output'] = None    # Clear analysis output
+                    st.session_state['validation_cache'] = {}     # Clear validation cache
 
-                                st.success(f"✅ Found {len(valid_tasks)} valid tasks (filtered out {len(tasks)-len(valid_tasks)} unknown types).")
+                    st.success(f"✅ Found {len(valid_tasks)} valid tasks (filtered out {len(tasks)-len(valid_tasks)} unknown types).")
 
-                                # Query for existing manifest
-                                if manifest_table:
-                                    manifest_result = db_service.load_latest_manifest(manifest_table, job_id_input)
+                    # Query for existing manifest
+                    if manifest_table:
+                        manifest_result = db_service.load_latest_manifest(manifest_table, job_id_input)
 
-                                    if manifest_result.get('found'):
-                                        st.session_state['existing_manifest'] = manifest_result
-                                    else:
-                                        st.session_state['existing_manifest'] = None
+                        if manifest_result.get('found'):
+                            st.session_state['existing_manifest'] = manifest_result
+                        else:
+                            st.session_state['existing_manifest'] = None
 
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-                            else:
-                                st.warning("Please enter Job ID.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                else:
+                    st.warning("Please enter Job ID.")
 
 # --- Step 1.5: Load Existing Manifest ---
 if st.session_state.get('existing_manifest') and st.session_state.get('loaded_manifest_version') is None:
@@ -372,8 +372,8 @@ if st.session_state['job_tasks']:
                             if code_context and isinstance(code_context, dict) and "error.txt" not in code_context:
                                 # Add job parameters
                                 if job_params_input:
-                                    current_meta = code_context.get("_metadata_", "")
-                                    code_context["_metadata_"] = f"{current_meta}\nParameters: {job_params_input}"
+                                    current_meta = code_context.get("__metadata__", "")
+                                    code_context["__metadata__"] = f"{current_meta}\nParameters: {job_params_input}"
 
                                 # Analyze
                                 mapping = agent.analyze_code(code_context)
@@ -472,9 +472,9 @@ if st.session_state['job_tasks']:
                     else:
                         st.markdown(log)
 
-            # Show summary
-            if st.session_state['analysis_output'].get('summary'):
-                st.success(st.session_state['analysis_output']['summary'])
+                # Show summary
+                if st.session_state['analysis_output'].get('summary'):
+                    st.success(st.session_state['analysis_output']['summary'])
 
 # --- Step 2: Manual Lineage Entry ---
 if st.session_state['job_tasks']:
@@ -1025,21 +1025,21 @@ if st.session_state['job_tasks']:
 
     # Display persistent validation result BEFORE buttons
     if st.session_state.get('validation_result'):
-    result = st.session_state['validation_result']
-    if result['type'] == 'error':
-        st.error(result['message'])
-    else:
-        st.success(result['message'])
+        result = st.session_state['validation_result']
+        if result['type'] == 'error':
+            st.error(result['message'])
+        else:
+            st.success(result['message'])
 
     # Display save/submit result messages (full width, after validation result)
     if st.session_state.get('save_submit_message'):
-    msg = st.session_state['save_submit_message']
-    if msg['type'] == 'success':
-        st.success(msg['message'])
-    elif msg['type'] == 'error':
-        st.error(msg['message'])
-    elif msg['type'] == 'info':
-        st.info(msg['message'])
+        msg = st.session_state['save_submit_message']
+        if msg['type'] == 'success':
+            st.success(msg['message'])
+        elif msg['type'] == 'error':
+            st.error(msg['message'])
+        elif msg['type'] == 'info':
+            st.info(msg['message'])
 
     # Note: Don't clear here - it causes re-render flickering
     # Message will be cleared on next save/submit action
@@ -1081,16 +1081,16 @@ if st.session_state['job_tasks']:
                         status="DRAFT"
                     )
 
-                if "✅" in save_res:
-                    st.session_state['save_submit_message'] = {
-                        'type': 'success',
-                        'message': f"✅ Draft saved to '{output_path}' and '{manifest_table}'"
-                    }
-                else:
-                    st.session_state['save_submit_message'] = {
-                        'type': 'error',
-                        'message': save_res
-                    }
+                    if "✅" in save_res:
+                        st.session_state['save_submit_message'] = {
+                            'type': 'success',
+                            'message': f"✅ Draft saved to '{output_path}' and '{manifest_table}'"
+                        }
+                    else:
+                        st.session_state['save_submit_message'] = {
+                            'type': 'error',
+                            'message': save_res
+                        }
             else:
                 st.session_state['save_submit_message'] = {
                     'type': 'success',
@@ -1206,7 +1206,3 @@ if st.session_state['job_tasks']:
     # View JSON
     with st.expander("View Generated Manifest JSON"):
         st.json(final_manifest)
-
-
-
-
