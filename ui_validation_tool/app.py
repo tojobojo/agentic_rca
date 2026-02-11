@@ -126,8 +126,8 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
 
                 except Exception as e:
                     st.error(f"Error: {e}")
-                else:
-                    st.warning("Please enter Job ID.")
+        else:
+            st.warning("Please enter Job ID.")
 
 # --- Step 1.5: Load Existing Manifest ---
 if st.session_state.get('existing_manifest') and st.session_state.get('loaded_manifest_version') is None:
