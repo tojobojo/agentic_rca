@@ -50,35 +50,27 @@ class MappingAgent:
              name="FileFilterAgent",
              model=self.config.model,
              # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
-             # generate_content_config={
-             #     "temperature": self.config.temperature,
-             #     "max_output_tokens": self.config.max_tokens
-             # },
+             # Best effort config for JSON + Determinism
+             generate_content_config={
+                 "temperature": 0.1,
+                 "max_output_tokens": self.config.max_tokens
+             },
              instruction="""
-You are an Intelligent File Filter for Data Lineage Analysis.
-Your Goal: Given a Task Name and a list of File Names, identify ONLY the files relevant for extracting data lineage (sources and targets).
+You are a precise Data Pruning AI. You ONLY speak JSON.
 
-Rules:
-1. **Config Files**: ALWAYS keep configuration files that appear to be for PRODUCTION (e.g., 'conf/prod/sales.yaml', 'prod.json'). 
-   - IGNORE 'dev', 'staging', or 'test' configs unless no other configs exist.
-   - If a file is just 'config.yaml', keep it.
-2. **Focus on Task Name**:
-   - The `Task Name` is your primary key. Look for a file/folder that matches it (fuzzy match).
-   - Example: Task `process_sales` -> `sales.py`, `jobs/process_sales.py`.
-   - **Crucial**: If the `Entry Point` (e.g. `main.py`) imports MANY job modules, you must **IGNORE** the Entry Point's broad imports.
-   - Select ONLY the specific module corresponding to the Task Name.
-   - **Isolation**: DISCARD any script that looks like a sibling task (e.g. `job_b.py` when analyzing `job_a`).
-   - Include utils or shared modules ONLY if they seem critical for defining table names.
-3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
-4. **Output**: Return the list of relevant filenames as a JSON object with a "files" key.
+Task: Identify relevant files for Data Lineage Extraction.
+Input: A Task Name and a list of internal File Paths.
 
-CRITICAL OUTPUT INSTRUCTIONS:
-- Respond *ONLY* with a valid JSON string.
-- Do NOT use markdown code blocks (e.g. ```json).
-- Do NOT add any preamble or explanation.
+RULES:
+1. MATCH Task Name logic.
+2. KEEP Prod Configs.
+3. DISCARD noise (tests, unrelated jobs).
 
-EXAMPLE OUTPUT:
-{"files": ["path/to/script.py", "path/to/config.yaml"]}
+OUTPUT FORMAT:
+Strict JSON object with a single key "files". No markdown. No comments.
+
+EXAMPLE:
+{"files": ["src/job.py", "conf/prod.yaml"]}
 """,
              output_schema=FilterResult
         )
@@ -88,36 +80,26 @@ EXAMPLE OUTPUT:
             name="LineageExtractionAgent",
             model=self.config.model,
             # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
-            # generate_content_config={
-            #     "temperature": self.config.temperature,
-            #     "max_output_tokens": self.config.max_tokens
-            # },
+            # Best effort config for JSON + Determinism
+            generate_content_config={
+                "temperature": 0.1,
+                "max_output_tokens": self.config.max_tokens
+            },
             instruction="""
-You are a Data Lineage Extraction Expert.
-Your Goal: Analyze the provided Code and Configuration files to extract Input Data (Sources) and Output Data (Targets).
+You are a Data Lineage Extraction AI. You ONLY speak JSON.
 
-Rules:
-1. **Analyze Configs First**: Look for keys like `source_table`, `target_table`, `input_path`, `output_path`, or specific dataset names in the YAML/JSON content. 
-   - Config values are usually the GROUND TRUTH. Confidence = HIGH.
-2. **Analyze Code**: Look for data reading/writing patterns.
-   - Spark: `spark.read.table(...)`, `spark.table(...)`, `df.write.saveAsTable(...)`.
-   - SQL: `FROM table_name`, `JOIN table_name`, `INSERT INTO table_name`.
-   - Python: Variable assignments that hold table names.
-3. **Contextual Intelligence**:
-   - If the code uses a variable `conf['input_table']`, look up 'input_table' in the provided config file content.
-4. **Output**: Return a structured JSON object with "assets", "logic_summary", and "resolution_trace" keys.
-   - `identifier` should be the fully qualified table name (catalog.schema.table) or file path if possible.
-   - `confidence`: HIGH (Config/Explicit), MEDIUM (Variable/Inferred), LOW (Guessed).
-   - `evidence`: Briefly explain where you found it (e.g., "Found in prod.yaml key 'source_table'").
-5. **Logic Summary**: Provide a brief 1-sentence summary of what the job does.
+Task: Extract Source/Target tables from Code/Configs.
 
-CRITICAL OUTPUT INSTRUCTIONS:
-- Respond *ONLY* with a valid JSON string.
-- Do NOT use markdown code blocks.
-- Do NOT add any preamble or explanation.
+RULES:
+1. READ Configs for keys like `source_table`, `input_path`.
+2. READ Code for Spark/SQL logic.
+3. IDENTIFY Source vs Target usage.
 
-EXAMPLE OUTPUT:
-{"assets": [{"asset_type": "TABLE", "subtype": "UNITY_CATALOG_TABLE", "usage": "SOURCE", "identifier": "catalog.schema.table", "confidence": "HIGH", "evidence": "Found in config"}], "logic_summary": "Reads from table A and writes to table B.", "resolution_trace": ["Found source table A"]}
+OUTPUT FORMAT:
+Strict JSON object. No markdown. No comments.
+
+EXAMPLE:
+{"assets": [{"asset_type": "TABLE", "subtype": "UNITY_CATALOG_TABLE", "usage": "SOURCE", "identifier": "catalog.schema.table", "confidence": "HIGH", "evidence": "Found in config"}], "logic_summary": "ETL job.", "resolution_trace": []}
 """,
             output_schema=ExtractionResult
         )

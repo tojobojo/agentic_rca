@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pydantic import BaseModel, ConfigDict
 from dotenv import load_dotenv
 
@@ -11,9 +11,118 @@ os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
 
 from google.adk.models.lite_llm import LiteLlm
-
+from google.adk.models.interfaces import Model
 from google.genai import types
 import requests
+import litellm
+
+class DatabricksModel(Model):
+    """
+    Custom Model adapter for Databricks/LiteLLM.
+    Strictly handles parameter sanitization to avoid 'reasoning_content' errors.
+    """
+    def __init__(self, model: str, api_key: str = None):
+        self.model_name = model
+        self.api_key = api_key
+
+    async def generate_content(
+        self, 
+        prompt: types.Content, 
+        generate_content_config: Any = None
+    ) -> types.GenerateContentResponse:
+        
+        # 1. Prepare Config (Sanitize)
+        config = {}
+        if generate_content_config:
+            if hasattr(generate_content_config, 'model_dump'):
+                config = generate_content_config.model_dump(exclude_none=True)
+            elif isinstance(generate_content_config, dict):
+                config = generate_content_config.copy()
+            
+        # CRITICAL: Strip 'reasoning_content' and other unsupported fields
+        config.pop('reasoning_content', None)
+        
+        # 2. Prepare Messages
+        messages = []
+        if isinstance(prompt, types.Content):
+             text_content = ""
+             for part in prompt.parts:
+                 if part.text: text_content += part.text
+             messages.append({"role": prompt.role, "content": text_content})
+        else:
+             messages.append({"role": "user", "content": str(prompt)})
+
+        # 3. Call LiteLLM
+        response = await litellm.acompletion(
+            model=self.model_name,
+            messages=messages,
+            api_key=self.api_key,
+            **config
+        )
+        
+        # 4. Map Response
+        content_text = response.choices[0].message.content
+        return types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text=content_text)]
+                    )
+            ]
+        )
+
+    async def generate_content_stream(
+        self, 
+        prompt: types.Content, 
+        generate_content_config: Any = None
+    ):
+        # 1. Prepare Config (Duplicated logic for safety/speed)
+        config = {}
+        if generate_content_config:
+            if hasattr(generate_content_config, 'model_dump'):
+                config = generate_content_config.model_dump(exclude_none=True)
+            elif isinstance(generate_content_config, dict):
+                config = generate_content_config.copy()
+            
+        config.pop('reasoning_content', None)
+        
+        # 2. Prepare Messages
+        messages = []
+        if isinstance(prompt, types.Content):
+             text_content = ""
+             for part in prompt.parts:
+                 if part.text: text_content += part.text
+             messages.append({"role": prompt.role, "content": text_content})
+        else:
+             messages.append({"role": "user", "content": str(prompt)})
+
+        # 3. Call LiteLLM with Stream
+        response = await litellm.acompletion(
+            model=self.model_name,
+            messages=messages,
+            api_key=self.api_key,
+            stream=True,
+            **config
+        )
+        
+        # 4. Yield Chunks
+        async for chunk in response:
+            content_text = chunk.choices[0].delta.content or ""
+            yield types.GenerateContentResponse(
+                candidates=[
+                    types.Candidate(
+                        content=types.Content(
+                            role="model",
+                            parts=[types.Part(text=content_text)]
+                        )
+                    )
+                ]
+            )
+
+
+
+
 
 def fix_tiktoken_cache():
     """
@@ -58,8 +167,9 @@ class UIConfig(BaseModel):
     llm_model: str = os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
 
     model: Optional[Any] = None
-    if LiteLlm:
-        model: LiteLlm = LiteLlm(
+    # Use Custom DatabricksModel instead of ADK's LiteLlm to avoid reasoning_content error
+    if DatabricksModel:
+        model: DatabricksModel = DatabricksModel(
             model=llm_model,
             api_key=databricks_token
         )
