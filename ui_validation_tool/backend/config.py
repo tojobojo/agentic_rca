@@ -9,13 +9,9 @@ load_dotenv()
 # fixing asyncio logs from litellm
 os.environ["LITELLM_LOGGING"] = "False"
 os.environ["LITELLM_DISABLE_LOGGING"] = "True"
-os.environ["OPENAI_AGENTS_ENABLE_LITELLM_SERIALIZER_PATCH"] = "True"
 
-from agents.extensions.models.litellm_model import LitellmModel
-
-from agents import set_tracing_disabled, ModelSettings
-
-set_tracing_disabled(True)
+from google.adk.models.lite_llm import LiteLlm
+from google.genai import types
 
 class UIConfig(BaseModel):
     """Configuration for the UI Validation Tool."""
@@ -29,8 +25,8 @@ class UIConfig(BaseModel):
     llm_model: str = os.getenv("LLM_MODEL", "databricks/databricks-gpt-oss-20b")
 
     model: Optional[Any] = None
-    if LitellmModel:
-        model: LitellmModel = LitellmModel(
+    if LiteLlm:
+        model: LiteLlm = LiteLlm(
             model=llm_model,
             api_key=databricks_token
         )
@@ -40,11 +36,9 @@ class UIConfig(BaseModel):
     max_tokens: int = int(os.getenv("MAX_TOKENS", "20000"))
     timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))
 
-    model_settings: ModelSettings = ModelSettings(
+    generate_content_config: types.GenerateContentConfig = types.GenerateContentConfig(
         temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        include_usage=True
+        max_output_tokens=max_tokens,
     )
     
     # Defaults

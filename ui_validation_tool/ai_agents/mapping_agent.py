@@ -1,6 +1,8 @@
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from agents import Agent, Runner
+from google.adk.agents import Agent
+from google.adk.runners import InMemoryRunner
+from google.genai import types
 from backend.config import get_config
 import logging
 import json
@@ -47,8 +49,8 @@ class MappingAgent:
         self.filter_agent = Agent(
              name="FileFilterAgent",
              model=self.config.model,
-             model_settings=self.config.model_settings,
-             instructions="""
+             generate_content_config=self.config.generate_content_config,
+             instruction="""
 You are an Intelligent File Filter for Data Lineage Analysis.
 Your Goal: Given a Task Name and a list of File Names, identify ONLY the files relevant for extracting data lineage (sources and targets).
 
@@ -64,17 +66,17 @@ Rules:
    - **Isolation**: DISCARD any script that looks like a sibling task (e.g. `job_b.py` when analyzing `job_a`).
    - Include utils or shared modules ONLY if they seem critical for defining table names.
 3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
-4. **Output**: Return the list of relevant filenames.
+4. **Output**: Return the list of relevant filenames as a JSON object with a "files" key.
 """,
-             output_type=FilterResult
+             output_schema=FilterResult
         )
 
         # --- Agent 2: Lineage Extractor ---
         self.extraction_agent = Agent(
             name="LineageExtractionAgent",
             model=self.config.model,
-            model_settings=self.config.model_settings,
-            instructions="""
+            generate_content_config=self.config.generate_content_config,
+            instruction="""
 You are a Data Lineage Extraction Expert.
 Your Goal: Analyze the provided Code and Configuration files to extract Input Data (Sources) and Output Data (Targets).
 
@@ -87,14 +89,61 @@ Rules:
    - Python: Variable assignments that hold table names.
 3. **Contextual Intelligence**:
    - If the code uses a variable `conf['input_table']`, look up 'input_table' in the provided config file content.
-4. **Output**: Return a structured list of `DataAsset` objects (Source/Target, Identifier, Confidence).
+4. **Output**: Return a structured JSON object with "assets", "logic_summary", and "resolution_trace" keys.
    - `identifier` should be the fully qualified table name (catalog.schema.table) or file path if possible.
    - `confidence`: HIGH (Config/Explicit), MEDIUM (Variable/Inferred), LOW (Guessed).
    - `evidence`: Briefly explain where you found it (e.g., "Found in prod.yaml key 'source_table'").
 5. **Logic Summary**: Provide a brief 1-sentence summary of what the job does.
 """,
-            output_type=ExtractionResult
+            output_schema=ExtractionResult
         )
+
+        # --- Runners ---
+        self._user_id = "mapping_agent_user"
+
+        self._filter_runner = InMemoryRunner(
+            agent=self.filter_agent,
+            app_name="filter_app",
+        )
+        self._extraction_runner = InMemoryRunner(
+            agent=self.extraction_agent,
+            app_name="extraction_app",
+        )
+
+        # Pre-create one session per runner (reused for all calls)
+        self._filter_session = None
+        self._extraction_session = None
+
+    async def _ensure_sessions(self):
+        """Lazily create sessions on first use."""
+        if self._filter_session is None:
+            self._filter_session = await self._filter_runner.session_service.create_session(
+                app_name="filter_app", user_id=self._user_id
+            )
+        if self._extraction_session is None:
+            self._extraction_session = await self._extraction_runner.session_service.create_session(
+                app_name="extraction_app", user_id=self._user_id
+            )
+
+    async def _run_agent(self, runner: InMemoryRunner, session_id: str, prompt: str) -> str:
+        """Run an ADK agent and collect the text response."""
+        content = types.Content(
+            role="user",
+            parts=[types.Part(text=prompt)],
+        )
+
+        final_text = ""
+        async for event in runner.run_async(
+            user_id=self._user_id,
+            session_id=session_id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        final_text += part.text
+        
+        return final_text
 
     async def analyze_code_async(self, code_context: dict, on_log=None) -> HybridResult:
         """
@@ -108,6 +157,8 @@ Rules:
 
         if not code_context:
             return HybridResult(assets=[], logic_summary="Empty context", resolution_trace=[])
+
+        await self._ensure_sessions()
 
         resolution_trace = []
         token_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -125,20 +176,27 @@ Rules:
             log(f"Step 1: Filtering relevant files from {len(all_files)} candidates...")
             try:
                 filter_prompt = f"Task Info: {task_info}\nFiles: {json.dumps(all_files)}"
-                filter_result = await Runner.run(self.filter_agent, filter_prompt)
+                response_text = await self._run_agent(
+                    self._filter_runner, self._filter_session.id, filter_prompt
+                )
                 
-                # Capture Token Usage
-                if hasattr(filter_result, "context_wrapper") and hasattr(filter_result.context_wrapper, "usage"):
-                    u = filter_result.context_wrapper.usage
-                    token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
-                    token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
-                    token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
-                    token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
+                token_usage["requests"] += 1
 
-                if hasattr(filter_result, "final_output_as"):
-                    filter_result = filter_result.final_output_as(FilterResult)
-                
-                # Unwrap the Pydantic model
+                # Parse the JSON response
+                try:
+                    filter_data = json.loads(response_text)
+                    filter_result = FilterResult(**filter_data)
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.warning(f"Failed to parse filter response as JSON: {e}. Raw: {response_text[:200]}")
+                    # Try to extract JSON from the response
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        filter_data = json.loads(json_match.group())
+                        filter_result = FilterResult(**filter_data)
+                    else:
+                        raise ValueError(f"No valid JSON found in response: {response_text[:200]}")
+
                 relevant_files = filter_result.files
 
                 # Fallback safety
@@ -187,18 +245,24 @@ Rules:
                 log(f"Analyzing {len(config_files)} config files...")
                 config_prompt = f"Task Info: {task_info}\n\nAnalyze these CONFIGURATION files for finding source/target tables:\n{config_context_str}"
                 
-                res = await Runner.run(self.extraction_agent, config_prompt)
-                # Capture Token Usage
-                if hasattr(res, "context_wrapper") and hasattr(res.context_wrapper, "usage"):
-                     u = res.context_wrapper.usage
-                     token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
-                     token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
-                     token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
-                     token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
-                
-                if hasattr(res, "final_output_as"):
-                    res = res.final_output_as(ExtractionResult)
-                
+                response_text = await self._run_agent(
+                    self._extraction_runner, self._extraction_session.id, config_prompt
+                )
+                token_usage["requests"] += 1
+
+                # Parse response
+                try:
+                    extraction_data = json.loads(response_text)
+                    res = ExtractionResult(**extraction_data)
+                except (json.JSONDecodeError, Exception):
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        extraction_data = json.loads(json_match.group())
+                        res = ExtractionResult(**extraction_data)
+                    else:
+                        raise ValueError(f"No valid JSON in config analysis response")
+
                 all_assets.extend(res.assets)
                 for t in res.resolution_trace: log(f"Config: {t}")
             except Exception as e:
@@ -223,18 +287,24 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
 --- CODE TO ANALYZE ({fname}) ---
 {content}
 """
-                res = await Runner.run(self.extraction_agent, script_prompt)
-                # Capture Token Usage
-                if hasattr(res, "context_wrapper") and hasattr(res.context_wrapper, "usage"):
-                     u = res.context_wrapper.usage
-                     token_usage["requests"] = token_usage.get("requests", 0) + getattr(u, "requests", 0)
-                     token_usage["input_tokens"] = token_usage.get("input_tokens", 0) + getattr(u, "input_tokens", 0)
-                     token_usage["output_tokens"] = token_usage.get("output_tokens", 0) + getattr(u, "output_tokens", 0)
-                     token_usage["total_tokens"] = token_usage.get("total_tokens", 0) + getattr(u, "total_tokens", 0)
+                response_text = await self._run_agent(
+                    self._extraction_runner, self._extraction_session.id, script_prompt
+                )
+                token_usage["requests"] += 1
 
-                if hasattr(res, "final_output_as"):
-                    res = res.final_output_as(ExtractionResult)
-                
+                # Parse response
+                try:
+                    extraction_data = json.loads(response_text)
+                    res = ExtractionResult(**extraction_data)
+                except (json.JSONDecodeError, Exception):
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        extraction_data = json.loads(json_match.group())
+                        res = ExtractionResult(**extraction_data)
+                    else:
+                        raise ValueError(f"No valid JSON in script analysis response for {fname}")
+
                 all_assets.extend(res.assets)
                 for t in res.resolution_trace: log(f"{fname}: {t}")
                 
@@ -321,4 +391,3 @@ Generic Config Context (For Reference Only - Do not re-extract assets from here 
             nest_asyncio.apply()
             return loop.run_until_complete(self.analyze_code_async(code_context, on_log))
         return loop.run_until_complete(self.analyze_code_async(code_context, on_log))
-
