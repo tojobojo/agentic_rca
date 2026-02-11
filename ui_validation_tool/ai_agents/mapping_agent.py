@@ -50,10 +50,10 @@ class MappingAgent:
              name="FileFilterAgent",
              model=self.config.model,
              # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
-             generate_content_config={
-                 "temperature": self.config.temperature,
-                 "max_output_tokens": self.config.max_tokens
-             },
+             # generate_content_config={
+             #     "temperature": self.config.temperature,
+             #     "max_output_tokens": self.config.max_tokens
+             # },
              instruction="""
 You are an Intelligent File Filter for Data Lineage Analysis.
 Your Goal: Given a Task Name and a list of File Names, identify ONLY the files relevant for extracting data lineage (sources and targets).
@@ -76,6 +76,9 @@ CRITICAL OUTPUT INSTRUCTIONS:
 - Respond *ONLY* with a valid JSON string.
 - Do NOT use markdown code blocks (e.g. ```json).
 - Do NOT add any preamble or explanation.
+
+EXAMPLE OUTPUT:
+{"files": ["path/to/script.py", "path/to/config.yaml"]}
 """,
              output_schema=FilterResult
         )
@@ -85,10 +88,10 @@ CRITICAL OUTPUT INSTRUCTIONS:
             name="LineageExtractionAgent",
             model=self.config.model,
             # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
-            generate_content_config={
-                "temperature": self.config.temperature,
-                "max_output_tokens": self.config.max_tokens
-            },
+            # generate_content_config={
+            #     "temperature": self.config.temperature,
+            #     "max_output_tokens": self.config.max_tokens
+            # },
             instruction="""
 You are a Data Lineage Extraction Expert.
 Your Goal: Analyze the provided Code and Configuration files to extract Input Data (Sources) and Output Data (Targets).
@@ -112,6 +115,9 @@ CRITICAL OUTPUT INSTRUCTIONS:
 - Respond *ONLY* with a valid JSON string.
 - Do NOT use markdown code blocks.
 - Do NOT add any preamble or explanation.
+
+EXAMPLE OUTPUT:
+{"assets": [{"asset_type": "TABLE", "subtype": "UNITY_CATALOG_TABLE", "usage": "SOURCE", "identifier": "catalog.schema.table", "confidence": "HIGH", "evidence": "Found in config"}], "logic_summary": "Reads from table A and writes to table B.", "resolution_trace": ["Found source table A"]}
 """,
             output_schema=ExtractionResult
         )
