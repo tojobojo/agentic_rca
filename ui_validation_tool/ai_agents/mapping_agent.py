@@ -49,7 +49,11 @@ class MappingAgent:
         self.filter_agent = Agent(
              name="FileFilterAgent",
              model=self.config.model,
-             generate_content_config=self.config.generate_content_config,
+             # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
+             generate_content_config={
+                 "temperature": self.config.temperature,
+                 "max_output_tokens": self.config.max_tokens
+             },
              instruction="""
 You are an Intelligent File Filter for Data Lineage Analysis.
 Your Goal: Given a Task Name and a list of File Names, identify ONLY the files relevant for extracting data lineage (sources and targets).
@@ -67,6 +71,11 @@ Rules:
    - Include utils or shared modules ONLY if they seem critical for defining table names.
 3. **Minimize Noise**: DISCARD unrelated scripts, unit tests, and documentation.
 4. **Output**: Return the list of relevant filenames as a JSON object with a "files" key.
+
+CRITICAL OUTPUT INSTRUCTIONS:
+- Respond *ONLY* with a valid JSON string.
+- Do NOT use markdown code blocks (e.g. ```json).
+- Do NOT add any preamble or explanation.
 """,
              output_schema=FilterResult
         )
@@ -75,7 +84,11 @@ Rules:
         self.extraction_agent = Agent(
             name="LineageExtractionAgent",
             model=self.config.model,
-            generate_content_config=self.config.generate_content_config,
+            # Pass a dict to avoid sending unsupported fields like reasoning_content defined in Types
+            generate_content_config={
+                "temperature": self.config.temperature,
+                "max_output_tokens": self.config.max_tokens
+            },
             instruction="""
 You are a Data Lineage Extraction Expert.
 Your Goal: Analyze the provided Code and Configuration files to extract Input Data (Sources) and Output Data (Targets).
@@ -94,6 +107,11 @@ Rules:
    - `confidence`: HIGH (Config/Explicit), MEDIUM (Variable/Inferred), LOW (Guessed).
    - `evidence`: Briefly explain where you found it (e.g., "Found in prod.yaml key 'source_table'").
 5. **Logic Summary**: Provide a brief 1-sentence summary of what the job does.
+
+CRITICAL OUTPUT INSTRUCTIONS:
+- Respond *ONLY* with a valid JSON string.
+- Do NOT use markdown code blocks.
+- Do NOT add any preamble or explanation.
 """,
             output_schema=ExtractionResult
         )
