@@ -743,140 +743,140 @@ if st.session_state['job_tasks']:
                     if ident:
                         all_assets.append(ident)
 
-                # --- Data Quality Rules UI ---
-                """ # DISABLED: Data Quality Rules UI
-                st.markdown("#### 🧪 Data Quality Rules")
+                # # --- Data Quality Rules UI ---
+                # # DISABLED: Data Quality Rules UI
+                # st.markdown("#### 🧪 Data Quality Rules")
 
-                dq_col1, dq_col2 = st.columns([1, 2])
+                # dq_col1, dq_col2 = st.columns([1, 2])
 
-                with dq_col1:
-                    selected_asset_for_dq = st.selectbox(
-                        "Select Asset to Add Rules",
-                        options=["Select Asset..."] + sorted(list(set(all_assets))),
-                        key=f"dq_sel_{task_key}",
-                        on_change=set_active_task,
-                        args=(task_key,)
-                    )
+                # with dq_col1:
+                #     selected_asset_for_dq = st.selectbox(
+                #         "Select Asset to Add Rules",
+                #         options=["Select Asset..."] + sorted(list(set(all_assets))),
+                #         key=f"dq_sel_{task_key}",
+                #         on_change=set_active_task,
+                #         args=(task_key,)
+                #     )
 
-                with dq_col2:
-                    if selected_asset_for_dq and selected_asset_for_dq != "Select Asset...":
-                        st.markdown("#### ➕ Add New Rule")
+                # with dq_col2:
+                #     if selected_asset_for_dq and selected_asset_for_dq != "Select Asset...":
+                #         st.markdown("#### ➕ Add New Rule")
 
-                        # Fetch columns
-                        asset_columns = [""]
-                        if selected_asset_for_dq in st.session_state['column_cache']:
-                            asset_columns.extend(st.session_state['column_cache'][selected_asset_for_dq])
-                        else:
-                            try:
-                                config_cols = DatabricksService().get_asset_columns(selected_asset_for_dq)
-                                if config_cols:
-                                    st.session_state['column_cache'][selected_asset_for_dq] = config_cols
-                                    asset_columns.extend(config_cols)
-                            except Exception:
-                                pass
+                #         # Fetch columns
+                #         asset_columns = [""]
+                #         if selected_asset_for_dq in st.session_state['column_cache']:
+                #             asset_columns.extend(st.session_state['column_cache'][selected_asset_for_dq])
+                #         else:
+                #             try:
+                #                 config_cols = DatabricksService().get_asset_columns(selected_asset_for_dq)
+                #                 if config_cols:
+                #                     st.session_state['column_cache'][selected_asset_for_dq] = config_cols
+                #                     asset_columns.extend(config_cols)
+                #             except Exception:
+                #                 pass
 
-                        fr_c1, fr_c2, fr_c3 = st.columns(3)
-                        r_cols = fr_c1.multiselect(
-                            "Column Name(s)",
-                            options=asset_columns,
-                            help="Select one or more columns.",
-                            default=None,
-                            key=f"dqc_{task_key}_{selected_asset_for_dq}"
-                        )
+                #         fr_c1, fr_c2, fr_c3 = st.columns(3)
+                #         r_cols = fr_c1.multiselect(
+                #             "Column Name(s)",
+                #             options=asset_columns,
+                #             help="Select one or more columns.",
+                #             default=None,
+                #             key=f"dqc_{task_key}_{selected_asset_for_dq}"
+                #         )
 
-                        r_type = fr_c2.selectbox(
-                            "Check Type",
-                            [
-                                "not_null",
-                                "unique",
-                                "row_count",
-                                "range",
-                                "accepted_values",
-                                "regex"
-                            ],
-                            key=f"dqt_{task_key}_{selected_asset_for_dq}"
-                        )
+                #         r_type = fr_c2.selectbox(
+                #             "Check Type",
+                #             [
+                #                 "not_null",
+                #                 "unique",
+                #                 "row_count",
+                #                 "range",
+                #                 "accepted_values",
+                #                 "regex"
+                #             ],
+                #             key=f"dqt_{task_key}_{selected_asset_for_dq}"
+                #         )
 
-                        help_text = "Value/Param"
-                        if r_type == "range":
-                            help_text = "Format: min-max (e.g. 0-100)"
-                        elif r_type == "accepted_values":
-                            help_text = "Format: A,B,C"
-                        elif r_type == "regex":
-                            help_text = "Regular Expression Pattern"
-                        elif r_type == "row_count":
-                            help_text = "Minimum Row Count (Integer)"
-                        elif r_type == "unique" or r_type == "not_null":
-                            help_text = "Leave empty (Not needed)"
+                #         help_text = "Value/Param"
+                #         if r_type == "range":
+                #             help_text = "Format: min-max (e.g. 0-100)"
+                #         elif r_type == "accepted_values":
+                #             help_text = "Format: A,B,C"
+                #         elif r_type == "regex":
+                #             help_text = "Regular Expression Pattern"
+                #         elif r_type == "row_count":
+                #             help_text = "Minimum Row Count (Integer)"
+                #         elif r_type == "unique" or r_type == "not_null":
+                #             help_text = "Leave empty (Not needed)"
 
-                        r_val = fr_c3.text_input(
-                            "Value/Param",
-                            help=help_text,
-                            placeholder=help_text,
-                            key=f"dqv_{task_key}_{selected_asset_for_dq}"
-                        )
+                #         r_val = fr_c3.text_input(
+                #             "Value/Param",
+                #             help=help_text,
+                #             placeholder=help_text,
+                #             key=f"dqv_{task_key}_{selected_asset_for_dq}"
+                #         )
 
-                        if st.button("Save Rule", key=f"btn_save_{task_key}_{selected_asset_for_dq}"):
-                            if not r_cols:
-                                st.error("❌ Please select at least one column.")
-                            else:
-                                for r_col in r_cols:
-                                    is_valid = True
-                                    err_msg = ""
+                #         if st.button("Save Rule", key=f"btn_save_{task_key}_{selected_asset_for_dq}"):
+                #             if not r_cols:
+                #                 st.error("❌ Please select at least one column.")
+                #             else:
+                #                 for r_col in r_cols:
+                #                     is_valid = True
+                #                     err_msg = ""
 
-                                    if r_col.strip() == "*" and r_type != "row_count":
-                                        is_valid = False
-                                        err_msg = f"❌ '*' selection can only be used with 'row_count' (Invalid for {r_type})."
+                #                     if r_col.strip() == "*" and r_type != "row_count":
+                #                         is_valid = False
+                #                         err_msg = f"❌ '*' selection can only be used with 'row_count' (Invalid for {r_type})."
 
-                                    if is_valid and r_type == "row_count" and not r_val.isdigit():
-                                        is_valid = False
-                                        err_msg = "❌ Row Count value must be an integer."
+                #                     if is_valid and r_type == "row_count" and not r_val.isdigit():
+                #                         is_valid = False
+                #                         err_msg = "❌ Row Count value must be an integer."
 
-                                    if is_valid and r_type == "range" and ("-" not in r_val or len(r_val.split("-")) != 2):
-                                        is_valid = False
-                                        err_msg = "❌ Range must be 'min-max'."
+                #                     if is_valid and r_type == "range" and ("-" not in r_val or len(r_val.split("-")) != 2):
+                #                         is_valid = False
+                #                         err_msg = "❌ Range must be 'min-max'."
 
-                                    if not is_valid:
-                                        st.error(err_msg)
-                                        break
-                                    else:
-                                        new_rule = {"column": r_col, "type": r_type}
-                                        if r_val:
-                                            if r_type == "range":
-                                                parts = r_val.split("-")
-                                                new_rule["min"] = parts[0].strip()
-                                                new_rule["max"] = parts[1].strip()
-                                            elif r_type == "accepted_values":
-                                                new_rule["values"] = [x.strip() for x in r_val.split(",")]
-                                            elif r_type == "unique" or r_type == "not_null":
-                                                pass
-                                            else:
-                                                new_rule["value"] = r_val
+                #                     if not is_valid:
+                #                         st.error(err_msg)
+                #                         break
+                #                     else:
+                #                         new_rule = {"column": r_col, "type": r_type}
+                #                         if r_val:
+                #                             if r_type == "range":
+                #                                 parts = r_val.split("-")
+                #                                 new_rule["min"] = parts[0].strip()
+                #                                 new_rule["max"] = parts[1].strip()
+                #                             elif r_type == "accepted_values":
+                #                                 new_rule["values"] = [x.strip() for x in r_val.split(",")]
+                #                             elif r_type == "unique" or r_type == "not_null":
+                #                                 pass
+                #                             else:
+                #                                 new_rule["value"] = r_val
 
-                                        if selected_asset_for_dq not in st.session_state['dq_rules']:
-                                            st.session_state['dq_rules'][selected_asset_for_dq] = []
-                                        st.session_state['dq_rules'][selected_asset_for_dq].append(new_rule)
+                #                         if selected_asset_for_dq not in st.session_state['dq_rules']:
+                #                             st.session_state['dq_rules'][selected_asset_for_dq] = []
+                #                         st.session_state['dq_rules'][selected_asset_for_dq].append(new_rule)
 
-                                st.session_state['expanded_task'] = task_key
-                                st.rerun()
+                #                 st.session_state['expanded_task'] = task_key
+                #                 st.rerun()
 
-                        # Show existing rules
-                        current_rules = st.session_state['dq_rules'].get(selected_asset_for_dq, [])
-                        rules_count = len(current_rules)
+                #         # Show existing rules
+                #         current_rules = st.session_state['dq_rules'].get(selected_asset_for_dq, [])
+                #         rules_count = len(current_rules)
 
-                        st.markdown(f"📋 **Current Rules ({rules_count})**")
-                        with st.container(height=200):
-                            if current_rules:
-                                for r_idx, rule in enumerate(current_rules):
-                                    r_col_a, r_col_b = st.columns([5, 1])
-                                    r_col_a.info(f"**{rule.get('column', '')}** : {rule.get('type')} | {rule.get('value', '')}")
-                                    if r_col_b.button("🗑️", key=f"del_rule_{task_key}_{selected_asset_for_dq}_{r_idx}"):
-                                        st.session_state['dq_rules'][selected_asset_for_dq].pop(r_idx)
-                                        st.session_state['expanded_task'] = task_key
-                                        st.rerun()
-                            else:
-                                st.caption("No rules configured for this asset yet.")
-                """
+                #         st.markdown(f"📋 **Current Rules ({rules_count})**")
+                #         with st.container(height=200):
+                #             if current_rules:
+                #                 for r_idx, rule in enumerate(current_rules):
+                #                     r_col_a, r_col_b = st.columns([5, 1])
+                #                     r_col_a.info(f"**{rule.get('column', '')}** : {rule.get('type')} | {rule.get('value', '')}")
+                #                     if r_col_b.button("🗑️", key=f"del_rule_{task_key}_{selected_asset_for_dq}_{r_idx}"):
+                #                         st.session_state['dq_rules'][selected_asset_for_dq].pop(r_idx)
+                #                         st.session_state['expanded_task'] = task_key
+                #                         st.rerun()
+                #             else:
+                #                 st.caption("No rules configured for this asset yet.")
+                
 
                 # Build manifest entry for this task (skip empty rows)
                 sources_manifest = []
