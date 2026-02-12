@@ -130,6 +130,11 @@ class AnomalyDetectionEngine:
         schema_anomaly = self._check_schema_drift(latest, baseline)
         if schema_anomaly:
             anomalies.append(schema_anomaly)
+
+        # 9. Check for Stale Data (New)
+        stale_anomaly = self._check_stale_data(latest, baseline)
+        if stale_anomaly:
+            anomalies.append(stale_anomaly)
             
         return anomalies
 
@@ -505,5 +510,47 @@ class AnomalyDetectionEngine:
                 deviation_z_score=0.0,
                 severity="high",
                 reason=msg
+            )
+
+        return None
+
+    def _check_stale_data(self, latest: Dict, baseline: List[Dict]) -> Optional[Anomaly]:
+        """
+        Check if data is stale (i.e. filter_value hasn't changed since last run).
+        Only applicable for APPEND load types where we expect the filter (run_id/date) to move forward.
+        """
+        if not baseline: return None
+        
+        last_run = baseline[0]
+        
+        # Extract filter values (from first target usually)
+        # Note: 'filter_value' is a top-level field in MetricRecord but here we have consolidated history.
+        # Step consolidation logic needs to hoist 'filter_value' up.
+        
+        def get_filter_val(run_data):
+            # Check top level first (if added to consolidation)
+            if "filter_value" in run_data: return run_data["filter_value"]
+            # Fallback: check raw metrics
+            targets = run_data["metrics_by_type"].get("TARGET", [])
+            for t in targets:
+                if t.get("filter_value"): return t.get("filter_value")
+            return None
+
+        curr_val = get_filter_val(latest)
+        last_val = get_filter_val(last_run)
+        
+        # If no filter value, we can't check
+        if not curr_val or not last_val: return None
+        
+        if curr_val == last_val:
+             return Anomaly(
+                run_id=latest["run_id"],
+                step_id=latest["step_id"],
+                metric_name="stale_data",
+                current_value=0.0, # N/A
+                historical_avg=0.0,
+                deviation_z_score=0.0,
+                severity="high",
+                reason=f"Stale Data: Filter Value '{curr_val}' matched previous run. Pipeline did not process new slice."
             )
         return None

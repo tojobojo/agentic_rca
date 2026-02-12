@@ -20,6 +20,12 @@ def validate_manifest_completeness():
                 task_errors.append(f"Target #{idx+1}: Missing identifier")
             if not tgt.get('subtype') or not tgt.get('subtype').strip():
                 task_errors.append(f"Target #{idx+1}: Missing subtype")
+            
+            # Check Append Config
+            load_type = tgt.get('load_type', 'FULL_REFRESH')
+            filter_col = tgt.get('filter_column', '')
+            if load_type == 'APPEND' and not filter_col.strip():
+                task_errors.append(f"Target #{idx+1} ({tgt.get('identifier')}): Append mode requires a Filter Column.")
         
         if task_errors:
             errors[task_key] = task_errors

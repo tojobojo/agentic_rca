@@ -47,6 +47,7 @@ class MetricRecord(BaseModel):
     # Metadata
     timestamp: str
     collection_status: str # "SUCCESS", "FAILED" (of the collection process)
+    filter_value: str = "" # Value used for filtering (e.g. run_id, date)
 
 class ObservabilityCollector:
     """
@@ -236,7 +237,9 @@ class ObservabilityCollector:
                             run_date_col=table_conf.get("run_id_column") if table_conf else None,
                             date_col=table_conf.get("date_column") if table_conf else None,
                             table_conf=table_conf,
-                            dq_rules=dq_rules_map.get(target, [])
+                            dq_rules=dq_rules_map.get(target, []),
+                            load_type=asset_entry.get("load_type", "FULL_REFRESH"),
+                            filter_column=asset_entry.get("filter_column", "")
                         )
                         # Cache the data part
                         stats_cache[cache_key] = (metric.rows_total, metric.rows_null_vital, metric.distinct_counts, metric.collection_status, metric.columns, metric.dq_validation_results)
@@ -263,7 +266,9 @@ class ObservabilityCollector:
         run_date_col: Optional[str] = None,
         date_col: Optional[str] = None,
         table_conf: Optional[Dict[str, Any]] = None,
-        dq_rules: List[Dict] = None
+        dq_rules: List[Dict] = None,
+        load_type: str = "FULL_REFRESH",
+        filter_column: str = ""
     ) -> MetricRecord:
         
         row_count = 0
@@ -271,6 +276,7 @@ class ObservabilityCollector:
         distinct_map = {}
         dq_results = {}
         status = "FAILED"
+        filter_val_str = ""
         
         try:
             # 1. Load Data (Handle Table vs Path)
@@ -299,7 +305,39 @@ class ObservabilityCollector:
             if df:
                 # 2. Filter by Run ID or Date
                 filtered_df = df
-                if run_date_col and run_date_col in df.columns:
+                
+                # Apply explicit Load Type filtering
+                if load_type == "APPEND" and filter_column:
+                    try:
+                        # Case 1: Filter by Run ID (if column implies run_id)
+                        if "run" in filter_column.lower() and "id" in filter_column.lower():
+                             logger.info(f"Filtering {target} by Run ID: {filter_column} == {run_id}")
+                             filtered_df = df.filter(F.col(filter_column) == str(run_id))
+                             filter_val_str = str(run_id)
+                        
+                        # Case 2: Filter by specific date (if explicitly provided - rare)
+                        # Case 3: Filter by MAX value (latest slice)
+                        else:
+                             logger.info(f"Filtering {target} by MAX({filter_column})")
+                             # Check if column exists
+                             if filter_column in df.columns:
+                                 max_val_row = df.agg(F.max(F.col(filter_column)).alias("max_val")).collect()
+                                 if max_val_row and max_val_row[0]["max_val"]:
+                                     max_val = max_val_row[0]["max_val"]
+                                     logger.info(f"  -> Max Value: {max_val}")
+                                     filtered_df = df.filter(F.col(filter_column) == max_val)
+                                     filter_val_str = str(max_val)
+                                 else:
+                                     logger.warning(f"Could not determine max value for {filter_column}. Using full table.")
+                             else:
+                                 logger.warning(f"Filter column {filter_column} not found in {target}. Using full table.")
+
+                    except Exception as filter_err:
+                        logger.warning(f"Failed to apply APPEND filter on {target}: {filter_err}. Using full table.")
+                        filtered_df = df
+
+                # Fallback to old config-based filtering (legacy)
+                elif run_date_col and run_date_col in df.columns:
                     filtered_df = df.filter(F.col(run_date_col) == str(run_id))
                     
                 # 3. Metrics Config
@@ -421,7 +459,8 @@ class ObservabilityCollector:
             dq_validation_results=dq_results,
             columns=all_cols if status == "SUCCESS" else [],
             timestamp=str(datetime.now()),
-            collection_status=status
+            collection_status=status,
+            filter_value=filter_val_str
         )
 
     def save_metrics(self, metrics: List[MetricRecord]):

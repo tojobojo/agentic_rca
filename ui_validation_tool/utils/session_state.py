@@ -60,5 +60,5 @@ def initialize_task_data(task_key):
     if task_key not in st.session_state['task_data']:
         st.session_state['task_data'][task_key] = {
             'sources': [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}],
-            'targets': [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
+            'targets': [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked', 'load_type': 'FULL_REFRESH', 'filter_column': ''}]
         }

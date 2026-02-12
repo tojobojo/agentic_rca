@@ -105,7 +105,7 @@ with st.expander("1️⃣ Job Configuration", expanded=True):
                         st.session_state['expanded_task'] = valid_tasks[0]['task_key']
 
                     # Clear analysis cache and counter on new job fetch
-                    st.session_state['analysis_cache'] = []
+                    st.session_state['analysis_cache'] = {}
                     st.session_state['analysis_run_count'] = 0
                     st.session_state['excluded_tasks'] = []
                     st.session_state['loaded_manifest_version'] = None
@@ -168,8 +168,8 @@ if st.session_state.get('existing_manifest') and st.session_state.get('loaded_ma
                 if task_key in manifest_data and task_key not in excluded_tasks:
                     # Load from manifest
                     st.session_state['task_data'][task_key] = {
-                        'sources': manifest_data[task_key].get('sources', [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}]),
-                        'targets': manifest_data[task_key].get('targets', [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}])
+                        'sources': manifest_data[task_key].get('sources', [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]),
+                        'targets': manifest_data[task_key].get('targets', [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}])
                     }
 
                     # Load DQ rules
@@ -418,7 +418,7 @@ if st.session_state['job_tasks']:
                                 asset_dict = {
                                     'subtype': asset.subtype,
                                     'identifier': asset.identifier,
-                                    'validation_status': '? Unchecked'
+                                    'validation_status': '❔ Unchecked'
                                 }
                                 if asset.usage == "SOURCE":
                                     sources.append(asset_dict)
@@ -426,8 +426,8 @@ if st.session_state['job_tasks']:
                                     targets.append(asset_dict)
 
                             # Update session state
-                            st.session_state['task_data'][task_key]['sources'] = sources if sources else [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}]
-                            st.session_state['task_data'][task_key]['targets'] = targets if targets else [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}]
+                            st.session_state['task_data'][task_key]['sources'] = sources if sources else [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
+                            st.session_state['task_data'][task_key]['targets'] = targets if targets else [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
 
                     # Mark analysis as complete
                     summary_msg = f"✅ Analysis Complete! Processed {unique_sources} unique sources for {total_tasks} tasks."
@@ -528,7 +528,7 @@ if st.session_state['job_tasks']:
                 # Fill NaN with empty strings for string columns; default status for validation
                 sources_df[['subtype', 'identifier']] = sources_df[['subtype', 'identifier']].fillna("")
                 sources_df['identifier'] = sources_df['identifier'].fillna("")
-                sources_df['validation_status'] = sources_df['validation_status'].fillna('? Unchecked')
+                sources_df['validation_status'] = sources_df['validation_status'].fillna('❔ Unchecked')
                 # Ensure string types to prevent type coercion issues
                 sources_df = sources_df.astype({'subtype': 'str', 'identifier': 'str', 'validation_status': 'str'})
 
@@ -542,7 +542,7 @@ if st.session_state['job_tasks']:
                             "Status",
                             width="small",
                             help="Validation result",
-                            default="? Unchecked"
+                            default="❔ Unchecked"
                         ),
                         "subtype": st.column_config.SelectboxColumn(
                             "Type",
@@ -577,14 +577,23 @@ if st.session_state['job_tasks']:
                 # Create DataFrame with explicit columns and types to ensure stability
                 targets_df = pd.DataFrame(
                     targets_data,
-                    columns=['subtype', 'identifier', 'validation_status']
+                    columns=['subtype', 'identifier', 'validation_status', 'load_type', 'filter_column']
                 )
                 # Fill NaN with empty strings for string columns, default status for validation
                 targets_df['subtype'] = targets_df['subtype'].fillna("")
                 targets_df['identifier'] = targets_df['identifier'].fillna("")
-                targets_df['validation_status'] = targets_df['validation_status'].fillna('? Unchecked')
+                targets_df['validation_status'] = targets_df['validation_status'].fillna('❔ Unchecked')
+                targets_df['load_type'] = targets_df['load_type'].fillna('FULL_REFRESH')
+                targets_df['filter_column'] = targets_df['filter_column'].fillna('')
+                
                 # Ensure string types to prevent type coercion issues
-                targets_df = targets_df.astype({'subtype': 'str', 'identifier': 'str', 'validation_status': 'str'})
+                targets_df = targets_df.astype({
+                    'subtype': 'str', 
+                    'identifier': 'str', 
+                    'validation_status': 'str',
+                    'load_type': 'str',
+                    'filter_column': 'str'
+                })
 
                 edited_targets = st.data_editor(
                     targets_df,
@@ -596,7 +605,7 @@ if st.session_state['job_tasks']:
                             "Status",
                             width="small",
                             help="Validation result",
-                            default="? Unchecked"
+                            default="❔ Unchecked"
                         ),
                         "subtype": st.column_config.SelectboxColumn(
                             "Type",
@@ -619,8 +628,23 @@ if st.session_state['job_tasks']:
                             width="large",
                             help="Full path or table name"
                         ),
+                        "load_type": st.column_config.SelectboxColumn(
+                            "Load Type",
+                            options=["FULL_REFRESH", "APPEND"],
+                            required=True,
+                            default="FULL_REFRESH",
+                            width="medium",
+                            help="How data is loaded. Use APPEND for incremental updates."
+                        ),
+                        "filter_column": st.column_config.TextColumn(
+                            "Filter Col",
+                            required=False,
+                            default="",
+                            width="medium",
+                            help="Column to identify new data (e.g. run_id, date). Required for APPEND."
+                        )
                     },
-                    column_order=["validation_status", "subtype", "identifier"],
+                    column_order=["validation_status", "subtype", "identifier", "load_type", "filter_column"],
                     disabled=["validation_status"],
                     hide_index=True
                 )
@@ -638,7 +662,7 @@ if st.session_state['job_tasks']:
                     cached_status = st.session_state.get('validation_cache', {}).get(composite_key) if composite_key else None
 
                     # Use cached status if available, otherwise default to Unchecked
-                    validation_status = cached_status if cached_status else '? Unchecked'
+                    validation_status = cached_status if cached_status else '❔ Unchecked'
 
                     normalized_row = {
                         'subtype': subtype,
@@ -651,27 +675,31 @@ if st.session_state['job_tasks']:
                 for row in edited_targets.to_dict('records'):
                     subtype = row.get('subtype', '') if pd.notna(row.get('subtype')) else ''
                     identifier = row.get('identifier', '') if pd.notna(row.get('identifier')) else ''
+                    load_type = row.get('load_type', 'FULL_REFRESH') if pd.notna(row.get('load_type')) else 'FULL_REFRESH'
+                    filter_column = row.get('filter_column', '') if pd.notna(row.get('filter_column')) else ''
 
                     # Check validation cache for this asset
                     composite_key = f"{identifier.strip()}|{subtype}" if identifier.strip() else ""
                     cached_status = st.session_state.get('validation_cache', {}).get(composite_key) if composite_key else None
 
                     # Use cached status if available, otherwise default to Unchecked
-                    validation_status = cached_status if cached_status else '? Unchecked'
+                    validation_status = cached_status if cached_status else '❔ Unchecked'
 
                     normalized_row = {
                         'subtype': subtype,
                         'identifier': identifier,
-                        'validation_status': validation_status
+                        'validation_status': validation_status,
+                        'load_type': load_type,
+                        'filter_column': filter_column
                     }
                     new_targets.append(normalized_row)
 
                 # Ensure at least one empty row if list is empty
                 if not new_sources:
-                    new_sources = [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}]
+                    new_sources = [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
 
                 if not new_targets:
-                    new_targets = [{'subtype': '', 'identifier': '', 'validation_status': '? Unchecked'}]
+                    new_targets = [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked', 'load_type': 'FULL_REFRESH', 'filter_column': ''}]
 
                 st.session_state['task_data'][task_key]['sources'] = new_sources
                 st.session_state['task_data'][task_key]['targets'] = new_targets
@@ -838,11 +866,13 @@ if st.session_state['job_tasks']:
                     if ident:
                         targets_manifest.append({
                             "name": ident,
-                            "type": tgt.get('subtype', 'UNKNOWN') or 'UNKNOWN'
+                            "type": tgt.get('subtype', 'UNKNOWN') or 'UNKNOWN',
+                            "load_type": tgt.get('load_type', 'FULL_REFRESH'),
+                            "filter_column": tgt.get('filter_column', '')
                         })
 
                 # DQ rules for this task
-                dq_section_manifest = []
+                dq_section_manifest = {}
                 for asset_name in all_assets:
                     if asset_name in st.session_state['dq_rules'] and st.session_state['dq_rules'][asset_name]:
                         dq_section_manifest[asset_name] = st.session_state['dq_rules'][asset_name]
