@@ -522,15 +522,24 @@ if st.session_state['job_tasks']:
                 # Create DataFrame with explicit columns and types to ensure stability
                 sources_df = pd.DataFrame(
                     sources_data,
-                    columns=['subtype', 'identifier', 'validation_status']
+                    columns=['subtype', 'identifier', 'validation_status', 'load_type', 'filter_column']
                 )
-
+                
                 # Fill NaN with empty strings for string columns; default status for validation
                 sources_df[['subtype', 'identifier']] = sources_df[['subtype', 'identifier']].fillna("")
                 sources_df['identifier'] = sources_df['identifier'].fillna("")
                 sources_df['validation_status'] = sources_df['validation_status'].fillna('❔ Unchecked')
+                sources_df['load_type'] = sources_df['load_type'].fillna('FULL_REFRESH')
+                sources_df['filter_column'] = sources_df['filter_column'].fillna('')
+                
                 # Ensure string types to prevent type coercion issues
-                sources_df = sources_df.astype({'subtype': 'str', 'identifier': 'str', 'validation_status': 'str'})
+                sources_df = sources_df.astype({
+                    'subtype': 'str', 
+                    'identifier': 'str', 
+                    'validation_status': 'str',
+                    'load_type': 'str',
+                    'filter_column': 'str'
+                })
 
                 edited_sources = st.data_editor(
                     sources_df,
@@ -565,8 +574,23 @@ if st.session_state['job_tasks']:
                             width="large",
                             help="Full path or table name"
                         ),
+                        "load_type": st.column_config.SelectboxColumn(
+                            "Load Type",
+                            options=["FULL_REFRESH", "APPEND"],
+                            required=True,
+                            default="FULL_REFRESH",
+                            width="medium",
+                            help="How data is loaded. Use APPEND for incremental updates."
+                        ),
+                        "filter_column": st.column_config.TextColumn(
+                            "Filter Col",
+                            required=False,
+                            default="",
+                            width="medium",
+                            help="Column to identify new data (e.g. run_id, date). Required for APPEND."
+                        )
                     },
-                    column_order=["validation_status", "subtype", "identifier"],
+                    column_order=["validation_status", "subtype", "identifier", "load_type", "filter_column"],
                     disabled=["validation_status"],
                     hide_index=True
                 )
@@ -667,7 +691,9 @@ if st.session_state['job_tasks']:
                     normalized_row = {
                         'subtype': subtype,
                         'identifier': identifier,
-                        'validation_status': validation_status
+                        'validation_status': validation_status,
+                        'load_type': row.get('load_type', 'FULL_REFRESH'),
+                        'filter_column': row.get('filter_column', '') if row.get('load_type') == 'APPEND' else ''
                     }
                     new_sources.append(normalized_row)
 
@@ -676,7 +702,8 @@ if st.session_state['job_tasks']:
                     subtype = row.get('subtype', '') if pd.notna(row.get('subtype')) else ''
                     identifier = row.get('identifier', '') if pd.notna(row.get('identifier')) else ''
                     load_type = row.get('load_type', 'FULL_REFRESH') if pd.notna(row.get('load_type')) else 'FULL_REFRESH'
-                    filter_column = row.get('filter_column', '') if pd.notna(row.get('filter_column')) else ''
+                    # CLEANUP: If full refresh, clear filter column
+                    filter_column = row.get('filter_column', '') if pd.notna(row.get('filter_column')) and load_type == 'APPEND' else ''
 
                     # Check validation cache for this asset
                     composite_key = f"{identifier.strip()}|{subtype}" if identifier.strip() else ""
@@ -696,7 +723,7 @@ if st.session_state['job_tasks']:
 
                 # Ensure at least one empty row if list is empty
                 if not new_sources:
-                    new_sources = [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked'}]
+                    new_sources = [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked', 'load_type': 'FULL_REFRESH', 'filter_column': ''}]
 
                 if not new_targets:
                     new_targets = [{'subtype': '', 'identifier': '', 'validation_status': '❔ Unchecked', 'load_type': 'FULL_REFRESH', 'filter_column': ''}]
@@ -717,6 +744,7 @@ if st.session_state['job_tasks']:
                         all_assets.append(ident)
 
                 # --- Data Quality Rules UI ---
+                """ # DISABLED: Data Quality Rules UI
                 st.markdown("#### 🧪 Data Quality Rules")
 
                 dq_col1, dq_col2 = st.columns([1, 2])
@@ -848,6 +876,7 @@ if st.session_state['job_tasks']:
                                         st.rerun()
                             else:
                                 st.caption("No rules configured for this asset yet.")
+                """
 
                 # Build manifest entry for this task (skip empty rows)
                 sources_manifest = []
@@ -858,7 +887,9 @@ if st.session_state['job_tasks']:
                     if ident:
                         sources_manifest.append({
                             "name": ident,
-                            "type": src.get('subtype', 'UNKNOWN') or 'UNKNOWN'
+                            "type": src.get('subtype', 'UNKNOWN') or 'UNKNOWN',
+                            "load_type": src.get('load_type', 'FULL_REFRESH'),
+                            "filter_column": src.get('filter_column', '')
                         })
 
                 for tgt in new_targets:

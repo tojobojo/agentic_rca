@@ -368,7 +368,8 @@ class ObservabilityCollector:
 
                 # 3. DQ RULE CHECKS (Dynamic SQL Generation)
                 dq_exprs = []
-                if dq_rules:
+                # DISABLED: Data Quality Checks
+                if False and dq_rules:
                     for i, rule in enumerate(dq_rules):
                         col = rule.get("column")
                         rtype = rule.get("type")
